@@ -1,0 +1,23 @@
+{
+  "challenges": {
+    "mh7s53av4dyzyfxriou": {
+      "challengerId": "1379522727857098943",
+      "targetId": "1431999143563362306",
+      "challengerName": "jourson218_",
+      "targetName": "bot1431999143563362306",
+      "rounds": 3,
+      "status": "pending",
+      "createdAt": "2025-10-26T14:03:59.863Z"
+    },
+    "mhhpiwnuf9q0xlw51z": {
+      "challengerId": "366364092039954432",
+      "targetId": "1182994824459190354",
+      "challengerName": ".viciousss.",
+      "targetName": "katelyn23_",
+      "rounds": 3,
+      "status": "pending",
+      "createdAt": "2025-11-02T12:48:27.354Z"
+    }
+  },
+  "stats": {}
+}
