@@ -539,7 +539,7 @@ const commands = [
     // Poll system
     new SlashCommandBuilder()
         .setName('pollcreate')
-        .setDescription('Create a poll (Grandmaster only)')
+        .setDescription('Create a poll (Executive+ only)')
         .addStringOption(option =>
             option.setName('question')
                 .setDescription('Poll question')
@@ -741,7 +741,7 @@ const commands = [
     
     new SlashCommandBuilder()
         .setName('kick')
-        .setDescription('Kick a user from the server (Grandmaster only)')
+        .setDescription('Kick a user from the server (Executive+ only)')
         .addUserOption(option =>
             option.setName('user')
                 .setDescription('User to kick')
@@ -811,9 +811,9 @@ function saveUserPoints() {
 // Role configuration with point requirements
 const roleConfig = {
     // Format: roleName: { points: requiredPoints, maxPoints: maxPoints, roleId: 'role_id' }
-    'Disciple': { points: 0, maxPoints: 10, roleId: null },
-    'Trainee': { points: 11, maxPoints: 20, roleId: null },
-    'Pupil': { points: 100, roleId: null },
+    'Disciple': { points: 0, maxPoints: 9, roleId: null },
+    'Trainee': { points: 10, maxPoints: 19, roleId: null },
+    'Pupil': { points: 20, roleId: null },
     'Skilled': { points: 200, roleId: null },
     'Apprentice': { points: 400, roleId: null },
     'Expert': { points: 750, roleId: null },
@@ -828,7 +828,7 @@ const otherRoles = {
     'Chosen Disciple': { roleId: null },
     'VIP': { roleId: null },
     'Executive': { roleId: null },
-    'Bounty Hunter': { roleId: null },
+    'Shadow Ops': { roleId: null },
     'Hero': { roleId: null }
 };
 
@@ -880,6 +880,15 @@ function isMasterOrHigher(member) {
 
 function isExpertOrHigher(member) {
     return hasMinimumRank(member, 'Expert') || isMasterOrHigher(member);
+}
+
+function isExecutiveOrHigher(member) {
+    return hasRole(member, 'Executive') || isGrandmaster(member);
+}
+
+function isExecutivePlus(member) {
+    // Check if member has Executive role or Elder role (Executive+)
+    return hasRole(member, 'Executive') || hasRole(member, 'Elder') || member.permissions.has('Administrator');
 }
 
 // Function to generate unique IDs
@@ -986,9 +995,15 @@ client.on(Events.InteractionCreate, async interaction => {
                 .setFooter({ text: 'ShadowBot' });
 
             if (nextRole) {
+                // Ranks that should show "Check Notion Page" instead of points
+                const notionPageRanks = ['Skilled', 'Apprentice', 'Expert', 'Warrior', 'Legendary Warrior', 'Master', 'Elder'];
+                const nextRoleText = notionPageRanks.includes(nextRole.roleName)
+                    ? `${nextRole.roleName}\nCheck Notion Page`
+                    : `${nextRole.roleName} (${nextRole.remaining} points needed)`;
+                
                 pointsEmbed.addFields({ 
                     name: 'Next Role', 
-                    value: `${nextRole.roleName} (${nextRole.remaining} points needed)`, 
+                    value: nextRoleText, 
                     inline: true 
                 });
             } else {
@@ -1187,11 +1202,14 @@ client.on(Events.InteractionCreate, async interaction => {
             const rolesEmbed = new EmbedBuilder()
                 .setColor(0x9932CC)
                 .setTitle('🏆 Clan Ranks & Requirements')
-                .setDescription('Here are all the available clan ranks and their point requirements:')
+                .setDescription('Here are all the available clan ranks and their requirements:')
                 .setTimestamp()
                 .setFooter({ text: 'ShadowBot' });
 
             const sortedRoles = Object.entries(roleConfig).sort((a, b) => a[1].points - b[1].points);
+            
+            // Ranks that should show "Check Notion Page" instead of points
+            const notionPageRanks = ['Skilled', 'Apprentice', 'Expert', 'Warrior', 'Legendary Warrior', 'Master', 'Elder'];
             
             for (const [roleName, config] of sortedRoles) {
                 const emoji = roleName === 'Elder' ? '👑' : 
@@ -1204,9 +1222,14 @@ client.on(Events.InteractionCreate, async interaction => {
                              roleName === 'Pupil' ? '🌱' : 
                              roleName === 'Trainee' ? '🔰' : '👤';
                 
+                // Show "Check Notion Page" for Skilled through Elder, points for others
+                const requirementText = notionPageRanks.includes(roleName) 
+                    ? 'Check Notion Page' 
+                    : `${config.points} points`;
+                
                 rolesEmbed.addFields({ 
                     name: `${emoji} ${roleName}`, 
-                    value: `${config.points} points`, 
+                    value: requirementText, 
                     inline: true 
                 });
             }
@@ -1321,9 +1344,15 @@ client.on(Events.InteractionCreate, async interaction => {
                 .setFooter({ text: 'ShadowBot' });
 
             if (nextRole) {
+                // Ranks that should show "Check Notion Page" instead of points
+                const notionPageRanks = ['Skilled', 'Apprentice', 'Expert', 'Warrior', 'Legendary Warrior', 'Master', 'Elder'];
+                const nextRoleText = notionPageRanks.includes(nextRole.roleName)
+                    ? `${nextRole.roleName}\nCheck Notion Page`
+                    : `${nextRole.roleName} (${nextRole.remaining} points needed)`;
+                
                 profileEmbed.addFields({ 
                     name: 'Next Role', 
-                    value: `${nextRole.roleName} (${nextRole.remaining} points needed)`, 
+                    value: nextRoleText, 
                     inline: true 
                 });
             } else {
@@ -1668,8 +1697,8 @@ client.on(Events.InteractionCreate, async interaction => {
 
         // Poll system
         else if (commandName === 'pollcreate') {
-            if (!isGrandmaster(interaction.member)) {
-                await interaction.reply({ content: '❌ Only Grandmasters can create polls!', ephemeral: true });
+            if (!isExecutiveOrHigher(interaction.member)) {
+                await interaction.reply({ content: '❌ Only Executive+ can create polls!', ephemeral: true });
                 return;
             }
 
@@ -1687,27 +1716,49 @@ client.on(Events.InteractionCreate, async interaction => {
                 return;
             }
 
-            const pollEmbed = new EmbedBuilder()
-                .setColor(0x9C27B0)
-                .setTitle('📊 Poll')
-                .setDescription(`**${question}**`)
-                .setTimestamp()
-                .setFooter({ text: `Poll created by ${interaction.user.username}` });
+            // Defer reply to prevent timeout
+            await interaction.deferReply();
 
-            let optionsText = '';
-            const emojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
-            
-            for (let i = 0; i < options.length; i++) {
-                optionsText += `${emojis[i]} ${options[i]}\n`;
-            }
+            try {
+                const pollEmbed = new EmbedBuilder()
+                    .setColor(0x9C27B0)
+                    .setTitle('📊 Poll')
+                    .setDescription(`**${question}**`)
+                    .setTimestamp()
+                    .setFooter({ text: `Poll created by ${interaction.user.username}` });
 
-            pollEmbed.addFields({ name: 'Options', value: optionsText, inline: false });
+                let optionsText = '';
+                const emojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
+                
+                for (let i = 0; i < options.length; i++) {
+                    optionsText += `${emojis[i]} ${options[i]}\n`;
+                }
 
-            const pollMessage = await interaction.reply({ embeds: [pollEmbed], fetchReply: true });
-            
-            // Add reactions
-            for (let i = 0; i < options.length; i++) {
-                await pollMessage.react(emojis[i]);
+                pollEmbed.addFields({ name: 'Options', value: optionsText, inline: false });
+
+                const pollMessage = await interaction.editReply({ embeds: [pollEmbed] });
+                
+                // Add reactions (this can take time but won't timeout since we already responded)
+                for (let i = 0; i < options.length; i++) {
+                    try {
+                        await pollMessage.react(emojis[i]);
+                    } catch (reactError) {
+                        console.error(`Error adding reaction ${emojis[i]}:`, reactError);
+                        // Continue with other reactions even if one fails
+                    }
+                }
+            } catch (error) {
+                console.error('Error creating poll:', error);
+                try {
+                    await interaction.editReply({ 
+                        content: `❌ An error occurred while creating the poll!\n\nError: ${error.message}`
+                    });
+                } catch (editError) {
+                    await interaction.followUp({ 
+                        content: `❌ An error occurred while creating the poll!\n\nError: ${error.message}`,
+                        ephemeral: true
+                    });
+                }
             }
         }
 
@@ -2084,7 +2135,6 @@ client.on(Events.InteractionCreate, async interaction => {
                         .setTitle('🎉 Giveaway Ended!')
                         .setDescription(`**${prize}**`)
                         .addFields(
-                            { name: 'Winners', value: 'To be announced', inline: true },
                             { name: 'Participants', value: giveaway.participants.length.toString(), inline: true }
                         )
                         .setTimestamp();
@@ -2193,16 +2243,65 @@ client.on(Events.InteractionCreate, async interaction => {
             const targetUser = interaction.options.getUser('user');
             const roleName = interaction.options.getString('role');
 
+            // Defer reply immediately to prevent timeout
+            await interaction.deferReply();
+
             try {
-                const member = interaction.guild.members.cache.get(targetUser.id);
+                const member = await interaction.guild.members.fetch(targetUser.id).catch(() => null);
                 if (!member) {
-                    await interaction.reply({ content: '❌ User not found in this server!', ephemeral: true });
+                    await interaction.editReply({ content: '❌ User not found in this server!' });
                     return;
                 }
 
-                const role = interaction.guild.roles.cache.find(r => r.name === roleName);
+                let role = interaction.guild.roles.cache.find(r => r.name === roleName);
+                
+                // If role doesn't exist, try to create it (only for known roles)
                 if (!role) {
-                    await interaction.reply({ content: `❌ Role "${roleName}" not found!`, ephemeral: true });
+                    // Check if it's a known role (from roleConfig or otherRoles)
+                    const isKnownRole = roleConfig.hasOwnProperty(roleName) || otherRoles.hasOwnProperty(roleName);
+                    
+                    if (isKnownRole) {
+                        try {
+                            // Create the role with a default color
+                            const defaultColors = {
+                                'VIP': 0xFFD700,      // Gold
+                                'Hero': 0xFF6B6B,     // Red
+                                'Executive': 0x9B59B6, // Purple
+                                'Shadow Ops': 0xE67E22, // Orange
+                                'Chosen Disciple': 0x3498DB // Blue
+                            };
+                            
+                            role = await interaction.guild.roles.create({
+                                name: roleName,
+                                color: defaultColors[roleName] || 0x95A5A6, // Default gray if not specified
+                                reason: `Auto-created by ${interaction.user.username} via /assignrole`
+                            });
+                            
+                            // Update the roleId in the config if it's in otherRoles
+                            if (otherRoles[roleName]) {
+                                otherRoles[roleName].roleId = role.id;
+                            }
+                            
+                        } catch (createError) {
+                            console.error('Error creating role:', createError);
+                            await interaction.editReply({ 
+                                content: `❌ Role "${roleName}" not found and could not be created! Make sure the bot has "Manage Roles" permission and its role is positioned above the role you're trying to create.\n\nError: ${createError.message}`
+                            });
+                            return;
+                        }
+                    } else {
+                        await interaction.editReply({ 
+                            content: `❌ Role "${roleName}" not found! Please create this role in Discord server settings first, or use a role from the available roles list.`
+                        });
+                        return;
+                    }
+                }
+
+                // Check if user already has the role
+                if (member.roles.cache.has(role.id)) {
+                    await interaction.editReply({ 
+                        content: `ℹ️ **${targetUser.username}** already has the **${roleName}** role!`
+                    });
                     return;
                 }
 
@@ -2219,11 +2318,25 @@ client.on(Events.InteractionCreate, async interaction => {
                     )
                     .setTimestamp();
 
-                await interaction.reply({ embeds: [roleEmbed] });
+                await interaction.editReply({ embeds: [roleEmbed] });
 
             } catch (error) {
                 console.error('Error assigning role:', error);
-                await interaction.reply({ content: '❌ An error occurred while assigning the role!', ephemeral: true });
+                try {
+                    await interaction.editReply({ 
+                        content: `❌ An error occurred while assigning the role!\n\nError: ${error.message}`
+                    });
+                } catch (editError) {
+                    // If we can't edit, try to reply (though this might fail if already deferred)
+                    try {
+                        await interaction.followUp({ 
+                            content: `❌ An error occurred while assigning the role!\n\nError: ${error.message}`,
+                            ephemeral: true
+                        });
+                    } catch (followUpError) {
+                        console.error('Failed to send error message:', followUpError);
+                    }
+                }
             }
         }
 
@@ -2450,8 +2563,8 @@ client.on(Events.InteractionCreate, async interaction => {
 
         // Moderation: Kick
         else if (commandName === 'kick') {
-            if (!isGrandmaster(interaction.member)) {
-                await interaction.reply({ content: '❌ Only Grandmasters can kick members!', ephemeral: true });
+            if (!isExecutiveOrHigher(interaction.member)) {
+                await interaction.reply({ content: '❌ Only Executive+ can kick members!', ephemeral: true });
                 return;
             }
 
@@ -2468,18 +2581,27 @@ client.on(Events.InteractionCreate, async interaction => {
                 return;
             }
 
-            const member = interaction.guild.members.cache.get(targetUser.id);
-            if (!member) {
-                await interaction.reply({ content: '❌ User not found in this server!', ephemeral: true });
-                return;
-            }
-
-            if (!member.kickable) {
-                await interaction.reply({ content: '❌ I do not have permission to kick this user (role hierarchy).', ephemeral: true });
-                return;
-            }
+            // Defer reply to prevent timeout
+            await interaction.deferReply();
 
             try {
+                const member = await interaction.guild.members.fetch(targetUser.id).catch(() => null);
+                if (!member) {
+                    await interaction.editReply({ content: '❌ User not found in this server!' });
+                    return;
+                }
+
+                // Check if target is Executive+ (Executive or Elder) - cannot kick them
+                if (isExecutivePlus(member)) {
+                    await interaction.editReply({ content: '❌ You cannot kick Executive+ members (Executive or Elder)!' });
+                    return;
+                }
+
+                if (!member.kickable) {
+                    await interaction.editReply({ content: '❌ I do not have permission to kick this user (role hierarchy).' });
+                    return;
+                }
+
                 await member.kick(reason);
 
                 const kickEmbed = new EmbedBuilder()
@@ -2493,10 +2615,19 @@ client.on(Events.InteractionCreate, async interaction => {
                     )
                     .setTimestamp();
 
-                await interaction.reply({ embeds: [kickEmbed] });
+                await interaction.editReply({ embeds: [kickEmbed] });
             } catch (error) {
                 console.error('Error kicking user:', error);
-                await interaction.reply({ content: '❌ An error occurred while kicking the user.', ephemeral: true });
+                try {
+                    await interaction.editReply({ 
+                        content: `❌ An error occurred while kicking the user.\n\nError: ${error.message}`
+                    });
+                } catch (editError) {
+                    await interaction.followUp({ 
+                        content: `❌ An error occurred while kicking the user.\n\nError: ${error.message}`,
+                        ephemeral: true
+                    });
+                }
             }
         }
 

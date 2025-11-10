@@ -10,5 +10,41 @@
     "endTime": "2025-11-02T12:04:23.033Z",
     "status": "ended",
     "participants": []
+  },
+  "mhtg8u2ns5rdtsme48b": {
+    "id": "mhtg8u2ns5rdtsme48b",
+    "prize": "test",
+    "duration": 2,
+    "winners": 1,
+    "creator": "366364092039954432",
+    "creatorName": ".viciousss.",
+    "createdAt": "2025-11-10T18:01:55.007Z",
+    "endTime": "2025-11-10T18:03:55.007Z",
+    "status": "active",
+    "participants": []
+  },
+  "mhth3a31htdnj8btwr": {
+    "id": "mhth3a31htdnj8btwr",
+    "prize": "q",
+    "duration": 12,
+    "winners": 2,
+    "creator": "1379522727857098943",
+    "creatorName": "jourson218_",
+    "createdAt": "2025-11-10T18:25:35.437Z",
+    "endTime": "2025-11-10T18:37:35.437Z",
+    "status": "ended",
+    "participants": []
+  },
+  "mhtid6w7jgiv3x2pxg9": {
+    "id": "mhtid6w7jgiv3x2pxg9",
+    "prize": "test",
+    "duration": 2,
+    "winners": 1,
+    "creator": "366364092039954432",
+    "creatorName": ".viciousss.",
+    "createdAt": "2025-11-10T19:01:17.479Z",
+    "endTime": "2025-11-10T19:03:17.479Z",
+    "status": "ended",
+    "participants": []
   }
 }

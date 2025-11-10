@@ -107,7 +107,7 @@ const commands = [
     // Poll system
     new SlashCommandBuilder()
         .setName('pollcreate')
-        .setDescription('Create a poll (Grandmaster only)')
+        .setDescription('Create a poll (Executive+ only)')
         .addStringOption(option =>
             option.setName('question')
                 .setDescription('Poll question')
@@ -308,7 +308,7 @@ const commands = [
     
     new SlashCommandBuilder()
         .setName('kick')
-        .setDescription('Kick a user from the server (Grandmaster only)')
+        .setDescription('Kick a user from the server (Executive+ only)')
         .addUserOption(option =>
             option.setName('user')
                 .setDescription('User to kick')
