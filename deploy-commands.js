@@ -84,6 +84,10 @@ const commands = [
         .setDescription('Decline a pending challenge'),
     
     new SlashCommandBuilder()
+        .setName('deny')
+        .setDescription('Deny a pending challenge'),
+    
+    new SlashCommandBuilder()
         .setName('challengestats')
         .setDescription('View your challenge statistics'),
     
@@ -143,7 +147,7 @@ const commands = [
     // Apprentice system
     new SlashCommandBuilder()
         .setName('apprenticerequest')
-        .setDescription('Request for an apprentice (Master+ only)')
+        .setDescription('Request for an apprentice (Grandmaster/Executive/Elder/Master/Legendary Warrior only)')
         .addStringOption(option =>
             option.setName('display_name')
                 .setDescription('Your display name')
@@ -177,6 +181,55 @@ const commands = [
     new SlashCommandBuilder()
         .setName('alliances')
         .setDescription('Check all alliance clans'),
+    
+    new SlashCommandBuilder()
+        .setName('deletealliance')
+        .setDescription('Delete an alliance with a clan (Grandmaster only)')
+        .addStringOption(option =>
+            option.setName('clan_name')
+                .setDescription('Name of the clan to delete alliance with')
+                .setRequired(true)),
+    
+    new SlashCommandBuilder()
+        .setName('promote')
+        .setDescription('Promote a member to a set rank (Grandmaster only)')
+        .addUserOption(option =>
+            option.setName('user')
+                .setDescription('User to promote')
+                .setRequired(true))
+        .addStringOption(option =>
+            option.setName('rank')
+                .setDescription('Rank to promote to')
+                .setRequired(true)),
+    
+    new SlashCommandBuilder()
+        .setName('sendmission')
+        .setDescription('Send a mission to the mission board (Grandmaster & Executive only)')
+        .addStringOption(option =>
+            option.setName('description')
+                .setDescription('Mission description')
+                .setRequired(true))
+        .addStringOption(option =>
+            option.setName('difficulty')
+                .setDescription('Mission difficulty')
+                .setRequired(true)
+                .addChoices(
+                    { name: 'Easy', value: 'Easy' },
+                    { name: 'Normal', value: 'Normal' },
+                    { name: 'Hard', value: 'Hard' }
+                ))
+        .addStringOption(option =>
+            option.setName('prize')
+                .setDescription('Mission prize description')
+                .setRequired(true)),
+    
+    new SlashCommandBuilder()
+        .setName('cancelmission')
+        .setDescription('Cancel a current mission (Shadow Ops only)')
+        .addStringOption(option =>
+            option.setName('mission_id')
+                .setDescription('Mission ID to cancel')
+                .setRequired(true)),
     
     // Links
     new SlashCommandBuilder()
@@ -275,7 +328,7 @@ const commands = [
     
     new SlashCommandBuilder()
         .setName('assignrole')
-        .setDescription('Assign a role to user (Grandmaster only)')
+        .setDescription('Assign a role to user (Executive+ only)')
         .addUserOption(option =>
             option.setName('user')
                 .setDescription('User to assign role to')
@@ -287,11 +340,11 @@ const commands = [
     
     new SlashCommandBuilder()
         .setName('deleteall')
-        .setDescription('Delete all messages in this channel (Grandmaster only)'),
+        .setDescription('Delete all messages in this channel (Executive+ only)'),
     
     new SlashCommandBuilder()
         .setName('deletelast10')
-        .setDescription('Delete the last 10 messages in this channel (Grandmaster only)'),
+        .setDescription('Delete the last 10 messages in this channel (Executive+ only)'),
     
     // Moderation commands
     new SlashCommandBuilder()

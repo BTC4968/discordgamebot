@@ -79,6 +79,10 @@ const giveawayDataFile = path.join(__dirname, 'data', 'giveawayData.json');
 const divisions = {};
 const divisionDataFile = path.join(__dirname, 'data', 'divisionData.json');
 
+// Mission system data
+const missions = {};
+const missionDataFile = path.join(__dirname, 'data', 'missionData.json');
+
 // Load all data files
 function loadAllData() {
     // Load challenge data
@@ -182,6 +186,16 @@ function loadAllData() {
             console.error('Error loading division data:', error);
         }
     }
+
+    // Load mission data
+    if (fs.existsSync(missionDataFile)) {
+        try {
+            const data = JSON.parse(fs.readFileSync(missionDataFile, 'utf8'));
+            Object.assign(missions, data);
+        } catch (error) {
+            console.error('Error loading mission data:', error);
+        }
+    }
 }
 
 // Load all data on startup
@@ -269,6 +283,14 @@ function saveDivisionData() {
         fs.writeFileSync(divisionDataFile, JSON.stringify(divisions, null, 2));
     } catch (error) {
         console.error('Error saving division data:', error);
+    }
+}
+
+function saveMissionData() {
+    try {
+        fs.writeFileSync(missionDataFile, JSON.stringify(missions, null, 2));
+    } catch (error) {
+        console.error('Error saving mission data:', error);
     }
 }
 
@@ -516,6 +538,10 @@ const commands = [
         .setDescription('Decline a pending challenge'),
     
     new SlashCommandBuilder()
+        .setName('deny')
+        .setDescription('Deny a pending challenge'),
+    
+    new SlashCommandBuilder()
         .setName('challengestats')
         .setDescription('View your challenge statistics'),
     
@@ -575,7 +601,7 @@ const commands = [
     // Apprentice system
     new SlashCommandBuilder()
         .setName('apprenticerequest')
-        .setDescription('Request for an apprentice (Master+ only)')
+        .setDescription('Request for an apprentice (Grandmaster/Executive/Elder/Master/Legendary Warrior only)')
         .addStringOption(option =>
             option.setName('display_name')
                 .setDescription('Your display name')
@@ -609,6 +635,55 @@ const commands = [
     new SlashCommandBuilder()
         .setName('alliances')
         .setDescription('Check all alliance clans'),
+    
+    new SlashCommandBuilder()
+        .setName('deletealliance')
+        .setDescription('Delete an alliance with a clan (Grandmaster only)')
+        .addStringOption(option =>
+            option.setName('clan_name')
+                .setDescription('Name of the clan to delete alliance with')
+                .setRequired(true)),
+    
+    new SlashCommandBuilder()
+        .setName('promote')
+        .setDescription('Promote a member to a set rank (Grandmaster only)')
+        .addUserOption(option =>
+            option.setName('user')
+                .setDescription('User to promote')
+                .setRequired(true))
+        .addStringOption(option =>
+            option.setName('rank')
+                .setDescription('Rank to promote to')
+                .setRequired(true)),
+    
+    new SlashCommandBuilder()
+        .setName('sendmission')
+        .setDescription('Send a mission to the mission board (Grandmaster & Executive only)')
+        .addStringOption(option =>
+            option.setName('description')
+                .setDescription('Mission description')
+                .setRequired(true))
+        .addStringOption(option =>
+            option.setName('difficulty')
+                .setDescription('Mission difficulty')
+                .setRequired(true)
+                .addChoices(
+                    { name: 'Easy', value: 'Easy' },
+                    { name: 'Normal', value: 'Normal' },
+                    { name: 'Hard', value: 'Hard' }
+                ))
+        .addStringOption(option =>
+            option.setName('prize')
+                .setDescription('Mission prize description')
+                .setRequired(true)),
+    
+    new SlashCommandBuilder()
+        .setName('cancelmission')
+        .setDescription('Cancel a current mission (Shadow Ops only)')
+        .addStringOption(option =>
+            option.setName('mission_id')
+                .setDescription('Mission ID to cancel')
+                .setRequired(true)),
     
     // Links
     new SlashCommandBuilder()
@@ -707,7 +782,7 @@ const commands = [
     
     new SlashCommandBuilder()
         .setName('assignrole')
-        .setDescription('Assign a role to user (Grandmaster only)')
+        .setDescription('Assign a role to user (Executive+ only)')
         .addUserOption(option =>
             option.setName('user')
                 .setDescription('User to assign role to')
@@ -825,11 +900,15 @@ const roleConfig = {
 
 // Other roles (not based on points)
 const otherRoles = {
+    'Grandmaster': { roleId: null },
+    'Executive': { roleId: null },
     'Chosen Disciple': { roleId: null },
     'VIP': { roleId: null },
-    'Executive': { roleId: null },
     'Shadow Ops': { roleId: null },
-    'Hero': { roleId: null }
+    'Hero': { roleId: null },
+    'Granny': { roleId: null },
+    'Tryouts': { roleId: null },
+    'Unranked': { roleId: null }
 };
 
 // Function to get user's current role based on points
@@ -891,6 +970,19 @@ function isExecutivePlus(member) {
     return hasRole(member, 'Executive') || hasRole(member, 'Elder') || member.permissions.has('Administrator');
 }
 
+function canRequestApprentice(member) {
+    // Grandmaster, Executive, Elder, Master, Legendary Warrior can request apprentices
+    return hasRole(member, 'Elder') || 
+           hasRole(member, 'Executive') || 
+           hasRole(member, 'Master') || 
+           hasRole(member, 'Legendary Warrior') ||
+           member.permissions.has('Administrator');
+}
+
+function isShadowOps(member) {
+    return hasRole(member, 'Shadow Ops') || member.permissions.has('Administrator');
+}
+
 // Function to generate unique IDs
 function generateId() {
     return Date.now().toString(36) + Math.random().toString(36).substr(2);
@@ -937,15 +1029,16 @@ client.on(Events.InteractionCreate, async interaction => {
                 .addFields(
                     { name: '🔧 Basic Commands', value: '/ping\n/help\n/serverinfo\n/links', inline: true },
                     { name: '📊 Points & Roles', value: '/points\n/update\n/roles\n/raidpoints\n/promotions', inline: true },
-                    { name: '⚔️ Combat System', value: '/challenge\n/accept\n/decline\n/challengestats\n/challengeleaderboard', inline: true },
+                    { name: '⚔️ Combat System', value: '/challenge\n/accept\n/decline\n/deny\n/challengestats\n/challengeleaderboard', inline: true },
                     { name: '🎯 Bounty System', value: '/bountyrequest', inline: true },
                     { name: '👑 VIP System', value: '/viplist\n/vipchallenge', inline: true },
                     { name: '📝 Apprentice System', value: '/apprenticerequest', inline: true },
-                    { name: '🤝 Alliance System', value: '/setalliance\n/alliances', inline: true },
+                    { name: '🤝 Alliance System', value: '/setalliance\n/alliances\n/deletealliance', inline: true },
                     { name: '📊 Polls & Giveaways', value: '/pollcreate\n/giveaway', inline: true },
                     { name: '👑 Leadership', value: '/leaders', inline: true },
                     { name: '🎵 Music', value: '/play', inline: true },
-                    { name: '🛠️ Admin Commands', value: '/assigndivision\n/assignrole\n/deleteall\n/deletelast10\n/ban\n/kick', inline: true }
+                    { name: '🛠️ Admin Commands', value: '/assigndivision\n/assignrole\n/promote\n/deleteall\n/deletelast10\n/ban\n/kick', inline: true },
+                    { name: '📋 Mission System', value: '/sendmission\n/cancelmission', inline: true }
                 )
                 .setTimestamp()
                 .setFooter({ text: 'ShadowBot' });
@@ -1563,6 +1656,43 @@ client.on(Events.InteractionCreate, async interaction => {
             saveChallengeData();
         }
 
+        else if (commandName === 'deny') {
+            const userId = interaction.user.id;
+            let challengeToDeny = null;
+            let challengeId = null;
+
+            // Find pending challenge for this user
+            for (const [id, challenge] of Object.entries(challenges)) {
+                if (challenge.status === 'pending' && challenge.targetId === userId) {
+                    challengeToDeny = challenge;
+                    challengeId = id;
+                    break;
+                }
+            }
+
+            if (!challengeToDeny) {
+                await interaction.reply({ content: '❌ You don\'t have any pending challenges!', ephemeral: true });
+                return;
+            }
+
+            // Update challenge status
+            challenges[challengeId].status = 'declined';
+            challenges[challengeId].declinedAt = new Date().toISOString();
+            saveChallengeData();
+
+            const denyEmbed = new EmbedBuilder()
+                .setColor(0xFF6B6B)
+                .setTitle('❌ Challenge Denied')
+                .setDescription(`${interaction.user.username} has denied the challenge from ${challengeToDeny.challengerName}`)
+                .setTimestamp();
+
+            await interaction.reply({ embeds: [denyEmbed] });
+
+            // Clean up challenge
+            delete challenges[challengeId];
+            saveChallengeData();
+        }
+
         else if (commandName === 'challengestats') {
             const userId = interaction.user.id;
             initializeUserStats(userId);
@@ -1936,8 +2066,8 @@ client.on(Events.InteractionCreate, async interaction => {
 
         // Apprentice system
         else if (commandName === 'apprenticerequest') {
-            if (!isMasterOrHigher(interaction.member)) {
-                await interaction.reply({ content: '❌ You need to be Master rank or higher to request apprentices!', ephemeral: true });
+            if (!canRequestApprentice(interaction.member)) {
+                await interaction.reply({ content: '❌ Only Grandmaster, Executive, Elder, Master, or Legendary Warrior can request apprentices!', ephemeral: true });
                 return;
             }
 
@@ -2035,6 +2165,282 @@ client.on(Events.InteractionCreate, async interaction => {
 
             alliancesEmbed.addFields({ name: 'Allied Clans', value: allianceText, inline: false });
             await interaction.reply({ embeds: [alliancesEmbed] });
+        }
+
+        else if (commandName === 'deletealliance') {
+            if (!isGrandmaster(interaction.member)) {
+                await interaction.reply({ content: '❌ Only Grandmasters can delete alliances!', ephemeral: true });
+                return;
+            }
+
+            const clanName = interaction.options.getString('clan_name');
+            
+            // Find alliance by clan name
+            let allianceToDelete = null;
+            let allianceId = null;
+            for (const [id, alliance] of Object.entries(alliances)) {
+                if (alliance.clanName.toLowerCase() === clanName.toLowerCase() && alliance.status === 'active') {
+                    allianceToDelete = alliance;
+                    allianceId = id;
+                    break;
+                }
+            }
+
+            if (!allianceToDelete) {
+                await interaction.reply({ content: `❌ No active alliance found with clan name "${clanName}"!`, ephemeral: true });
+                return;
+            }
+
+            // Mark as deleted
+            alliances[allianceId].status = 'deleted';
+            alliances[allianceId].deletedAt = new Date().toISOString();
+            alliances[allianceId].deletedBy = interaction.user.id;
+            alliances[allianceId].deletedByName = interaction.user.username;
+            saveAllianceData();
+
+            const deleteEmbed = new EmbedBuilder()
+                .setColor(0xFF6B6B)
+                .setTitle('❌ Alliance Deleted')
+                .setDescription(`Alliance with **${allianceToDelete.clanName}** has been deleted`)
+                .addFields(
+                    { name: 'Clan Name', value: allianceToDelete.clanName, inline: true },
+                    { name: 'Deleted By', value: interaction.user.username, inline: true }
+                )
+                .setTimestamp();
+
+            await interaction.reply({ embeds: [deleteEmbed] });
+        }
+
+        else if (commandName === 'promote') {
+            if (!isGrandmaster(interaction.member)) {
+                await interaction.reply({ content: '❌ Only Grandmasters can promote members!', ephemeral: true });
+                return;
+            }
+
+            const targetUser = interaction.options.getUser('user');
+            const rankName = interaction.options.getString('rank');
+
+            await interaction.deferReply();
+
+            try {
+                const member = await interaction.guild.members.fetch(targetUser.id).catch(() => null);
+                if (!member) {
+                    await interaction.editReply({ content: '❌ User not found in this server!' });
+                    return;
+                }
+
+                // Check if rank exists in roleConfig or otherRoles
+                const isRankRole = roleConfig.hasOwnProperty(rankName) || otherRoles.hasOwnProperty(rankName);
+                if (!isRankRole) {
+                    await interaction.editReply({ content: `❌ Rank "${rankName}" not found! Please use a valid rank name.` });
+                    return;
+                }
+
+                // Find the role
+                let role = interaction.guild.roles.cache.find(r => r.name === rankName);
+                if (!role) {
+                    await interaction.editReply({ content: `❌ Role "${rankName}" not found! Please create this role first.` });
+                    return;
+                }
+
+                // Get current role based on points
+                const currentPoints = userPoints[targetUser.id] || 0;
+                const currentRole = getUserCurrentRole(currentPoints);
+                const oldRole = interaction.guild.roles.cache.find(r => r.name === currentRole);
+
+                // Remove old role if it exists and is different
+                if (oldRole && oldRole.id !== role.id && member.roles.cache.has(oldRole.id)) {
+                    await member.roles.remove(oldRole);
+                }
+
+                // Add new role
+                await member.roles.add(role);
+
+                // Record promotion
+                recordPromotion(targetUser.id, currentRole, rankName);
+
+                const promoteEmbed = new EmbedBuilder()
+                    .setColor(0x4CAF50)
+                    .setTitle('✅ Member Promoted')
+                    .setDescription(`**${targetUser.username}** has been promoted to **${rankName}**`)
+                    .addFields(
+                        { name: 'User', value: targetUser.username, inline: true },
+                        { name: 'New Rank', value: rankName, inline: true },
+                        { name: 'Promoted By', value: interaction.user.username, inline: true }
+                    )
+                    .setTimestamp();
+
+                await interaction.editReply({ embeds: [promoteEmbed] });
+
+            } catch (error) {
+                console.error('Error promoting user:', error);
+                try {
+                    await interaction.editReply({ 
+                        content: `❌ An error occurred while promoting the user!\n\nError: ${error.message}`
+                    });
+                } catch (editError) {
+                    await interaction.followUp({ 
+                        content: `❌ An error occurred while promoting the user!\n\nError: ${error.message}`,
+                        ephemeral: true
+                    });
+                }
+            }
+        }
+
+        else if (commandName === 'sendmission') {
+            if (!isExecutiveOrHigher(interaction.member)) {
+                await interaction.reply({ content: '❌ Only Grandmasters and Executives can send missions!', ephemeral: true });
+                return;
+            }
+
+            const description = interaction.options.getString('description');
+            const difficulty = interaction.options.getString('difficulty');
+            const prize = interaction.options.getString('prize');
+
+            // Calculate coin reward based on difficulty
+            const coinRewards = {
+                'Easy': 300,
+                'Normal': 750,
+                'Hard': 1500
+            };
+            const coinReward = coinRewards[difficulty] || 0;
+
+            const missionId = generateId();
+            missions[missionId] = {
+                id: missionId,
+                description,
+                difficulty,
+                prize,
+                coinReward,
+                createdBy: interaction.user.id,
+                createdByName: interaction.user.username,
+                createdAt: new Date().toISOString(),
+                status: 'active',
+                acceptedBy: null,
+                acceptedByName: null,
+                acceptedAt: null
+            };
+            saveMissionData();
+
+            await interaction.deferReply();
+
+            try {
+                // Get mission board channel from config (will be set later)
+                const missionBoardChannelId = config.MISSION_BOARD_CHANNEL_ID;
+                if (!missionBoardChannelId) {
+                    await interaction.editReply({ 
+                        content: '❌ Mission board channel not configured! Please set MISSION_BOARD_CHANNEL_ID in config.'
+                    });
+                    return;
+                }
+
+                const missionChannel = client.channels.cache.get(missionBoardChannelId);
+                if (!missionChannel) {
+                    await interaction.editReply({ 
+                        content: '❌ Mission board channel not found! Please check the channel ID.'
+                    });
+                    return;
+                }
+
+                // Create mission embed
+                const missionEmbed = new EmbedBuilder()
+                    .setColor(difficulty === 'Easy' ? 0x4CAF50 : difficulty === 'Normal' ? 0xFF9800 : 0xF44336)
+                    .setTitle(`📋 Mission: ${difficulty}`)
+                    .setDescription(description)
+                    .addFields(
+                        { name: 'Difficulty', value: difficulty, inline: true },
+                        { name: 'Coin Reward', value: `${coinReward} coins`, inline: true },
+                        { name: 'Prize', value: prize, inline: false },
+                        { name: 'Mission ID', value: missionId, inline: false },
+                        { name: 'Status', value: 'Available', inline: true }
+                    )
+                    .setFooter({ text: 'React with ✅ to accept this mission' })
+                    .setTimestamp();
+
+                const missionMessage = await missionChannel.send({ embeds: [missionEmbed] });
+                await missionMessage.react('✅');
+
+                // Store message ID for later reference
+                missions[missionId].messageId = missionMessage.id;
+                missions[missionId].channelId = missionChannel.id;
+                saveMissionData();
+
+                await interaction.editReply({ 
+                    content: `✅ Mission sent to mission board!\n\nMission ID: ${missionId}`
+                });
+
+            } catch (error) {
+                console.error('Error sending mission:', error);
+                await interaction.editReply({ 
+                    content: `❌ An error occurred while sending the mission!\n\nError: ${error.message}`
+                });
+            }
+        }
+
+        else if (commandName === 'cancelmission') {
+            if (!isShadowOps(interaction.member)) {
+                await interaction.reply({ content: '❌ Only Shadow Ops can cancel missions!', ephemeral: true });
+                return;
+            }
+
+            const missionId = interaction.options.getString('mission_id');
+
+            if (!missions[missionId]) {
+                await interaction.reply({ content: '❌ Mission not found!', ephemeral: true });
+                return;
+            }
+
+            const mission = missions[missionId];
+            if (mission.status !== 'active') {
+                await interaction.reply({ content: '❌ This mission is not active!', ephemeral: true });
+                return;
+            }
+
+            // Update mission status
+            missions[missionId].status = 'cancelled';
+            missions[missionId].cancelledAt = new Date().toISOString();
+            missions[missionId].cancelledBy = interaction.user.id;
+            missions[missionId].cancelledByName = interaction.user.username;
+            saveMissionData();
+
+            // Update mission message if it exists
+            if (mission.messageId && mission.channelId) {
+                try {
+                    const missionChannel = client.channels.cache.get(mission.channelId);
+                    if (missionChannel) {
+                        const missionMessage = await missionChannel.messages.fetch(mission.messageId).catch(() => null);
+                        if (missionMessage) {
+                            const cancelledEmbed = new EmbedBuilder()
+                                .setColor(0x9E9E9E)
+                                .setTitle(`📋 Mission: ${mission.difficulty} [CANCELLED]`)
+                                .setDescription(mission.description)
+                                .addFields(
+                                    { name: 'Difficulty', value: mission.difficulty, inline: true },
+                                    { name: 'Coin Reward', value: `${mission.coinReward} coins`, inline: true },
+                                    { name: 'Status', value: 'Cancelled', inline: true },
+                                    { name: 'Cancelled By', value: interaction.user.username, inline: true }
+                                )
+                                .setTimestamp();
+                            
+                            await missionMessage.edit({ embeds: [cancelledEmbed] });
+                        }
+                    }
+                } catch (error) {
+                    console.error('Error updating mission message:', error);
+                }
+            }
+
+            const cancelEmbed = new EmbedBuilder()
+                .setColor(0xFF6B6B)
+                .setTitle('❌ Mission Cancelled')
+                .setDescription(`Mission **${missionId}** has been cancelled`)
+                .addFields(
+                    { name: 'Mission ID', value: missionId, inline: true },
+                    { name: 'Cancelled By', value: interaction.user.username, inline: true }
+                )
+                .setTimestamp();
+
+            await interaction.reply({ embeds: [cancelEmbed] });
         }
 
         // Links
@@ -2235,8 +2641,8 @@ client.on(Events.InteractionCreate, async interaction => {
         }
 
         else if (commandName === 'assignrole') {
-            if (!isGrandmaster(interaction.member)) {
-                await interaction.reply({ content: '❌ Only Grandmasters can assign roles!', ephemeral: true });
+            if (!isExecutiveOrHigher(interaction.member)) {
+                await interaction.reply({ content: '❌ Only Executive+ can assign roles!', ephemeral: true });
                 return;
             }
 
@@ -2474,8 +2880,8 @@ client.on(Events.InteractionCreate, async interaction => {
         }
 
         else if (commandName === 'deleteall') {
-            if (!isGrandmaster(interaction.member)) {
-                await interaction.reply({ content: '❌ Only Grandmasters can delete all messages!', ephemeral: true });
+            if (!isExecutiveOrHigher(interaction.member)) {
+                await interaction.reply({ content: '❌ Only Executive+ can delete all messages!', ephemeral: true });
                 return;
             }
 
@@ -2492,8 +2898,8 @@ client.on(Events.InteractionCreate, async interaction => {
         }
 
         else if (commandName === 'deletelast10') {
-            if (!isGrandmaster(interaction.member)) {
-                await interaction.reply({ content: '❌ Only Grandmasters can delete messages!', ephemeral: true });
+            if (!isExecutiveOrHigher(interaction.member)) {
+                await interaction.reply({ content: '❌ Only Executive+ can delete messages!', ephemeral: true });
                 return;
             }
 
@@ -2919,19 +3325,12 @@ client.on(Events.MessageReactionAdd, async (reaction, user) => {
         // Ignore bot reactions
         if (user.bot) return;
 
-        // Check if reaction is ✅ (white check mark)
-        if (reaction.emoji.name !== '✅') return;
-
         // Fetch the message if it's a partial
         const message = reaction.message.partial ? await reaction.message.fetch() : reaction.message;
         
         // Get the channel
         const channel = message.channel;
         
-        // Check if this is the bounty-proof channel
-        const bountyProofChannelId = config.BOUNTY_PROOF_CHANNEL_ID || config.NOTIFICATION_CHANNEL_ID;
-        if (!bountyProofChannelId || channel.id !== bountyProofChannelId) return;
-
         // Get the guild and member who reacted
         const guild = message.guild;
         if (!guild) return;
@@ -2939,112 +3338,279 @@ client.on(Events.MessageReactionAdd, async (reaction, user) => {
         const member = await guild.members.fetch(user.id);
         if (!member) return;
 
-        // Check if user is grandmaster or has Executive role
-        const hasExecutiveRole = hasRole(member, 'Executive');
-        if (!isGrandmaster(member) && !hasExecutiveRole) {
-            // Remove the reaction if user doesn't have permission
-            await reaction.remove();
-            return;
-        }
+        // Handle mission acceptance (✅ reaction on mission board)
+        if (reaction.emoji.name === '✅') {
+            const missionBoardChannelId = config.MISSION_BOARD_CHANNEL_ID;
+            if (missionBoardChannelId && channel.id === missionBoardChannelId) {
+                // This is a mission board message - handle mission acceptance
+                if (message.embeds.length > 0) {
+                    const embed = message.embeds[0];
+                    let missionId = null;
 
-        // Find bounty ID from message (check embed fields or message content)
-        let bountyId = null;
-        let completedByUserId = message.author.id;
-        let completedByUsername = message.author.username;
+                    // Find Mission ID in embed fields
+                    if (embed.fields) {
+                        const missionIdField = embed.fields.find(field => 
+                            field.name.toLowerCase().includes('mission id')
+                        );
+                        if (missionIdField) {
+                            missionId = missionIdField.value.trim();
+                        }
+                    }
 
-        // Check if message has embeds
-        if (message.embeds.length > 0) {
-            const embed = message.embeds[0];
-            // Look for Bounty ID in embed fields
-            if (embed.fields) {
-                const bountyIdField = embed.fields.find(field => 
-                    field.name.toLowerCase().includes('bounty id') || 
-                    field.name.toLowerCase().includes('bountyid')
-                );
-                if (bountyIdField) {
-                    bountyId = bountyIdField.value.trim();
+                    if (missionId && missions[missionId]) {
+                        const mission = missions[missionId];
+                        
+                        // Check if mission is still active and not already accepted
+                        if (mission.status === 'active' && !mission.acceptedBy) {
+                            // Accept the mission
+                            missions[missionId].status = 'accepted';
+                            missions[missionId].acceptedBy = user.id;
+                            missions[missionId].acceptedByName = user.username;
+                            missions[missionId].acceptedAt = new Date().toISOString();
+                            saveMissionData();
+
+                            // Update mission message
+                            const acceptedEmbed = new EmbedBuilder()
+                                .setColor(mission.difficulty === 'Easy' ? 0x4CAF50 : mission.difficulty === 'Normal' ? 0xFF9800 : 0xF44336)
+                                .setTitle(`📋 Mission: ${mission.difficulty} [ACCEPTED]`)
+                                .setDescription(mission.description)
+                                .addFields(
+                                    { name: 'Difficulty', value: mission.difficulty, inline: true },
+                                    { name: 'Coin Reward', value: `${mission.coinReward} coins`, inline: true },
+                                    { name: 'Prize', value: mission.prize, inline: false },
+                                    { name: 'Mission ID', value: missionId, inline: false },
+                                    { name: 'Status', value: 'Accepted', inline: true },
+                                    { name: 'Accepted By', value: user.username, inline: true }
+                                )
+                                .setFooter({ text: 'Post proof in mission-proof channel when complete' })
+                                .setTimestamp();
+
+                            await message.edit({ embeds: [acceptedEmbed] });
+                            
+                            // Remove the reaction to prevent multiple accepts
+                            await reaction.remove();
+                            
+                            // Send confirmation to user
+                            try {
+                                const userDM = await client.users.fetch(user.id);
+                                await userDM.send({ 
+                                    content: `✅ You have accepted mission **${missionId}**!\n\nPost your proof in the mission-proof channel when you complete it.`
+                                });
+                            } catch (dmError) {
+                                console.log(`Could not send DM to user ${user.username}:`, dmError.message);
+                            }
+                        } else if (mission.acceptedBy && mission.acceptedBy !== user.id) {
+                            // Mission already accepted by someone else
+                            await reaction.remove();
+                        }
+                    }
+                    return;
                 }
             }
-            // Also check embed description or title for bounty ID
-            if (!bountyId) {
-                const description = embed.description || '';
-                const title = embed.title || '';
-                const bountyIdMatch = (description + ' ' + title).match(/bounty[_\s-]?id[:\s]*([a-z0-9]+)/i);
-                if (bountyIdMatch) {
-                    bountyId = bountyIdMatch[1];
+
+            // Handle mission proof approval (✅ reaction on mission-proof channel)
+            const missionProofChannelId = config.MISSION_PROOF_CHANNEL_ID;
+            if (missionProofChannelId && channel.id === missionProofChannelId) {
+                // Check if user is grandmaster or has Executive role
+                const hasExecutiveRole = hasRole(member, 'Executive');
+                if (!isGrandmaster(member) && !hasExecutiveRole) {
+                    // Remove the reaction if user doesn't have permission
+                    await reaction.remove();
+                    return;
+                }
+
+                // Find mission ID from message
+                let missionId = null;
+                let completedByUserId = message.author.id;
+                let completedByUsername = message.author.username;
+
+                // Check if message has embeds
+                if (message.embeds.length > 0) {
+                    const embed = message.embeds[0];
+                    if (embed.fields) {
+                        const missionIdField = embed.fields.find(field => 
+                            field.name.toLowerCase().includes('mission id')
+                        );
+                        if (missionIdField) {
+                            missionId = missionIdField.value.trim();
+                        }
+                    }
+                    if (!missionId) {
+                        const description = embed.description || '';
+                        const title = embed.title || '';
+                        const missionIdMatch = (description + ' ' + title).match(/mission[_\s-]?id[:\s]*([a-z0-9]+)/i);
+                        if (missionIdMatch) {
+                            missionId = missionIdMatch[1];
+                        }
+                    }
+                }
+
+                // Also check message content for mission ID
+                if (!missionId && message.content) {
+                    const missionIdMatch = message.content.match(/mission[_\s-]?id[:\s]*([a-z0-9]+)/i);
+                    if (missionIdMatch) {
+                        missionId = missionIdMatch[1];
+                    }
+                }
+
+                // If we found a mission ID, approve the mission
+                if (missionId && missions[missionId]) {
+                    const mission = missions[missionId];
+                    
+                    // Check if mission was accepted by this user
+                    if (mission.acceptedBy === completedByUserId && mission.status === 'accepted') {
+                        // Award coins
+                        coins[completedByUserId] = (coins[completedByUserId] || 0) + mission.coinReward;
+                        saveCoinsData();
+
+                        // Update mission status
+                        missions[missionId].status = 'completed';
+                        missions[missionId].completedAt = new Date().toISOString();
+                        missions[missionId].approvedBy = user.id;
+                        missions[missionId].approvedByName = user.username;
+                        saveMissionData();
+
+                        const userCoins = coins[completedByUserId];
+
+                        // Create completed mission embed
+                        const completedEmbed = new EmbedBuilder()
+                            .setColor(0x00FF00)
+                            .setTitle('✅ Mission Completed!')
+                            .setDescription(`**${completedByUsername}** has successfully completed a mission!`)
+                            .addFields(
+                                { name: '💰 Coins Awarded', value: `+${mission.coinReward}`, inline: true },
+                                { name: 'Total Coins', value: userCoins.toString(), inline: true },
+                                { name: 'Approved By', value: `<@${user.id}> (${user.username})`, inline: true },
+                                { name: 'Mission ID', value: missionId, inline: false },
+                                { name: 'Difficulty', value: mission.difficulty, inline: true },
+                                { name: 'Prize', value: mission.prize, inline: false }
+                            )
+                            .setTimestamp()
+                            .setFooter({ text: 'ShadowBot' });
+
+                        // Send DM to the user who completed the mission
+                        try {
+                            const completedUser = await client.users.fetch(completedByUserId);
+                            await completedUser.send({ embeds: [completedEmbed] });
+                        } catch (dmError) {
+                            console.log(`Could not send DM to user ${completedByUsername}:`, dmError.message);
+                        }
+                    }
+                }
+                return;
+            }
+
+            // Handle bounty proof approval (existing code)
+            const bountyProofChannelId = config.BOUNTY_PROOF_CHANNEL_ID || config.NOTIFICATION_CHANNEL_ID;
+            if (bountyProofChannelId && channel.id === bountyProofChannelId) {
+                // Check if user is grandmaster or has Executive role
+                const hasExecutiveRole = hasRole(member, 'Executive');
+                if (!isGrandmaster(member) && !hasExecutiveRole) {
+                    // Remove the reaction if user doesn't have permission
+                    await reaction.remove();
+                    return;
+                }
+
+                // Find bounty ID from message (check embed fields or message content)
+                let bountyId = null;
+                let completedByUserId = message.author.id;
+                let completedByUsername = message.author.username;
+
+                // Check if message has embeds
+                if (message.embeds.length > 0) {
+                    const embed = message.embeds[0];
+                    // Look for Bounty ID in embed fields
+                    if (embed.fields) {
+                        const bountyIdField = embed.fields.find(field => 
+                            field.name.toLowerCase().includes('bounty id') || 
+                            field.name.toLowerCase().includes('bountyid')
+                        );
+                        if (bountyIdField) {
+                            bountyId = bountyIdField.value.trim();
+                        }
+                    }
+                    // Also check embed description or title for bounty ID
+                    if (!bountyId) {
+                        const description = embed.description || '';
+                        const title = embed.title || '';
+                        const bountyIdMatch = (description + ' ' + title).match(/bounty[_\s-]?id[:\s]*([a-z0-9]+)/i);
+                        if (bountyIdMatch) {
+                            bountyId = bountyIdMatch[1];
+                        }
+                    }
+                }
+
+                // Also check message content for bounty ID
+                if (!bountyId && message.content) {
+                    const bountyIdMatch = message.content.match(/bounty[_\s-]?id[:\s]*([a-z0-9]+)/i);
+                    if (bountyIdMatch) {
+                        bountyId = bountyIdMatch[1];
+                    }
+                }
+
+                // If we found a bounty ID, try to get bounty info
+                let bounty = null;
+                if (bountyId && bounties[bountyId]) {
+                    bounty = bounties[bountyId];
+                }
+
+                // Award 250 coins to the user who posted the proof
+                const coinsToAward = 250;
+                coins[completedByUserId] = (coins[completedByUserId] || 0) + coinsToAward;
+                saveCoinsData();
+
+                // Get user's current coin balance
+                const userCoins = coins[completedByUserId];
+
+                // Update bounty status if we found the bounty
+                if (bounty) {
+                    bounty.status = 'completed';
+                    bounty.completedBy = completedByUserId;
+                    bounty.completedAt = new Date().toISOString();
+                    bounty.approvedBy = user.id;
+                    saveBountyData();
+                }
+
+                // Create completed bounty embed
+                const completedEmbed = new EmbedBuilder()
+                    .setColor(0x00FF00)
+                    .setTitle('✅ Bounty Completed!')
+                    .setDescription(`**${completedByUsername}** has successfully completed a bounty!`)
+                    .addFields(
+                        { name: '💰 Coins Awarded', value: `+${coinsToAward}`, inline: true },
+                        { name: 'Total Coins', value: userCoins.toString(), inline: true },
+                        { name: 'Approved By', value: `<@${user.id}> (${user.username})`, inline: true }
+                    )
+                    .setTimestamp()
+                    .setFooter({ text: 'ShadowBot' });
+
+                if (bounty) {
+                    completedEmbed.addFields(
+                        { name: 'Target', value: bounty.title, inline: false },
+                        { name: 'Reason', value: bounty.description, inline: false },
+                        { name: 'Bounty ID', value: bountyId, inline: false }
+                    );
+                } else if (bountyId) {
+                    completedEmbed.addFields({ name: 'Bounty ID', value: bountyId, inline: false });
+                }
+
+                // Post to completed-bounties channel
+                const completedBountiesChannelId = config.COMPLETED_BOUNTIES_CHANNEL_ID || config.NOTIFICATION_CHANNEL_ID;
+                if (completedBountiesChannelId && completedBountiesChannelId !== 'your_channel_id_here') {
+                    const completedChannel = client.channels.cache.get(completedBountiesChannelId);
+                    if (completedChannel) {
+                        await completedChannel.send({ embeds: [completedEmbed] });
+                    }
+                }
+
+                // Send DM to the user who completed the bounty
+                try {
+                    const completedUser = await client.users.fetch(completedByUserId);
+                    await completedUser.send({ embeds: [completedEmbed] });
+                } catch (dmError) {
+                    console.log(`Could not send DM to user ${completedByUsername}:`, dmError.message);
                 }
             }
-        }
-
-        // Also check message content for bounty ID
-        if (!bountyId && message.content) {
-            const bountyIdMatch = message.content.match(/bounty[_\s-]?id[:\s]*([a-z0-9]+)/i);
-            if (bountyIdMatch) {
-                bountyId = bountyIdMatch[1];
-            }
-        }
-
-        // If we found a bounty ID, try to get bounty info
-        let bounty = null;
-        if (bountyId && bounties[bountyId]) {
-            bounty = bounties[bountyId];
-        }
-
-        // Award 250 coins to the user who posted the proof
-        const coinsToAward = 250;
-        coins[completedByUserId] = (coins[completedByUserId] || 0) + coinsToAward;
-        saveCoinsData();
-
-        // Get user's current coin balance
-        const userCoins = coins[completedByUserId];
-
-        // Update bounty status if we found the bounty
-        if (bounty) {
-            bounty.status = 'completed';
-            bounty.completedBy = completedByUserId;
-            bounty.completedAt = new Date().toISOString();
-            bounty.approvedBy = user.id;
-            saveBountyData();
-        }
-
-        // Create completed bounty embed
-        const completedEmbed = new EmbedBuilder()
-            .setColor(0x00FF00)
-            .setTitle('✅ Bounty Completed!')
-            .setDescription(`**${completedByUsername}** has successfully completed a bounty!`)
-            .addFields(
-                { name: '💰 Coins Awarded', value: `+${coinsToAward}`, inline: true },
-                { name: 'Total Coins', value: userCoins.toString(), inline: true },
-                { name: 'Approved By', value: `<@${user.id}> (${user.username})`, inline: true }
-            )
-            .setTimestamp()
-            .setFooter({ text: 'ShadowBot' });
-
-        if (bounty) {
-            completedEmbed.addFields(
-                { name: 'Target', value: bounty.title, inline: false },
-                { name: 'Reason', value: bounty.description, inline: false },
-                { name: 'Bounty ID', value: bountyId, inline: false }
-            );
-        } else if (bountyId) {
-            completedEmbed.addFields({ name: 'Bounty ID', value: bountyId, inline: false });
-        }
-
-        // Post to completed-bounties channel
-        const completedBountiesChannelId = config.COMPLETED_BOUNTIES_CHANNEL_ID || config.NOTIFICATION_CHANNEL_ID;
-        if (completedBountiesChannelId && completedBountiesChannelId !== 'your_channel_id_here') {
-            const completedChannel = client.channels.cache.get(completedBountiesChannelId);
-            if (completedChannel) {
-                await completedChannel.send({ embeds: [completedEmbed] });
-            }
-        }
-
-        // Send DM to the user who completed the bounty
-        try {
-            const completedUser = await client.users.fetch(completedByUserId);
-            await completedUser.send({ embeds: [completedEmbed] });
-        } catch (dmError) {
-            console.log(`Could not send DM to user ${completedByUsername}:`, dmError.message);
         }
 
     } catch (error) {
