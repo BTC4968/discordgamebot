@@ -217,11 +217,7 @@ const commands = [
                     { name: 'Easy', value: 'Easy' },
                     { name: 'Normal', value: 'Normal' },
                     { name: 'Hard', value: 'Hard' }
-                ))
-        .addStringOption(option =>
-            option.setName('prize')
-                .setDescription('Mission prize description')
-                .setRequired(true)),
+                )),
     
     new SlashCommandBuilder()
         .setName('cancelmission')

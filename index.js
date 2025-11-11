@@ -671,11 +671,7 @@ const commands = [
                     { name: 'Easy', value: 'Easy' },
                     { name: 'Normal', value: 'Normal' },
                     { name: 'Hard', value: 'Hard' }
-                ))
-        .addStringOption(option =>
-            option.setName('prize')
-                .setDescription('Mission prize description')
-                .setRequired(true)),
+                )),
     
     new SlashCommandBuilder()
         .setName('cancelmission')
@@ -2295,7 +2291,6 @@ client.on(Events.InteractionCreate, async interaction => {
 
             const description = interaction.options.getString('description');
             const difficulty = interaction.options.getString('difficulty');
-            const prize = interaction.options.getString('prize');
 
             // Calculate coin reward based on difficulty
             const coinRewards = {
@@ -2310,7 +2305,6 @@ client.on(Events.InteractionCreate, async interaction => {
                 id: missionId,
                 description,
                 difficulty,
-                prize,
                 coinReward,
                 createdBy: interaction.user.id,
                 createdByName: interaction.user.username,
@@ -2318,7 +2312,8 @@ client.on(Events.InteractionCreate, async interaction => {
                 status: 'active',
                 acceptedBy: null,
                 acceptedByName: null,
-                acceptedAt: null
+                acceptedAt: null,
+                rewardClaimed: false
             };
             saveMissionData();
 
@@ -2342,7 +2337,7 @@ client.on(Events.InteractionCreate, async interaction => {
                     return;
                 }
 
-                // Create mission embed
+                // Create mission embed with Accept/Decline buttons
                 const missionEmbed = new EmbedBuilder()
                     .setColor(difficulty === 'Easy' ? 0x4CAF50 : difficulty === 'Normal' ? 0xFF9800 : 0xF44336)
                     .setTitle(`📋 Mission: ${difficulty}`)
@@ -2350,15 +2345,29 @@ client.on(Events.InteractionCreate, async interaction => {
                     .addFields(
                         { name: 'Difficulty', value: difficulty, inline: true },
                         { name: 'Coin Reward', value: `${coinReward} coins`, inline: true },
-                        { name: 'Prize', value: prize, inline: false },
                         { name: 'Mission ID', value: missionId, inline: false },
                         { name: 'Status', value: 'Available', inline: true }
                     )
-                    .setFooter({ text: 'React with ✅ to accept this mission' })
+                    .setFooter({ text: 'Click Accept or Decline to respond' })
                     .setTimestamp();
 
-                const missionMessage = await missionChannel.send({ embeds: [missionEmbed] });
-                await missionMessage.react('✅');
+                const acceptButton = new ButtonBuilder()
+                    .setCustomId(`mission_accept_${missionId}`)
+                    .setLabel('✅ Accept')
+                    .setStyle(ButtonStyle.Success);
+
+                const declineButton = new ButtonBuilder()
+                    .setCustomId(`mission_decline_${missionId}`)
+                    .setLabel('❌ Decline')
+                    .setStyle(ButtonStyle.Danger);
+
+                const row = new ActionRowBuilder()
+                    .addComponents(acceptButton, declineButton);
+
+                const missionMessage = await missionChannel.send({ 
+                    embeds: [missionEmbed],
+                    components: [row]
+                });
 
                 // Store message ID for later reference
                 missions[missionId].messageId = missionMessage.id;
@@ -2422,7 +2431,7 @@ client.on(Events.InteractionCreate, async interaction => {
                                 )
                                 .setTimestamp();
                             
-                            await missionMessage.edit({ embeds: [cancelledEmbed] });
+                            await missionMessage.edit({ embeds: [cancelledEmbed], components: [] });
                         }
                     }
                 } catch (error) {
@@ -3233,6 +3242,134 @@ client.on(Events.InteractionCreate, async interaction => {
     const { customId } = interaction;
 
     try {
+        // Handle mission accept/decline buttons
+        if (customId.startsWith('mission_accept_') || customId.startsWith('mission_decline_')) {
+            const missionId = customId.split('_')[2];
+            const mission = missions[missionId];
+
+            if (!mission) {
+                await interaction.reply({ content: '❌ Mission not found.', ephemeral: true });
+                return;
+            }
+
+            if (mission.status !== 'active') {
+                await interaction.reply({ content: `❌ This mission is no longer available.`, ephemeral: true });
+                return;
+            }
+
+            const isAccepted = customId.startsWith('mission_accept_');
+            
+            if (isAccepted) {
+                // Accept the mission
+                missions[missionId].status = 'accepted';
+                missions[missionId].acceptedBy = interaction.user.id;
+                missions[missionId].acceptedByName = interaction.user.username;
+                missions[missionId].acceptedAt = new Date().toISOString();
+                saveMissionData();
+
+                // Update the mission message
+                const acceptedEmbed = new EmbedBuilder()
+                    .setColor(mission.difficulty === 'Easy' ? 0x4CAF50 : mission.difficulty === 'Normal' ? 0xFF9800 : 0xF44336)
+                    .setTitle(`📋 Mission: ${mission.difficulty} [ACCEPTED]`)
+                    .setDescription(mission.description)
+                    .addFields(
+                        { name: 'Difficulty', value: mission.difficulty, inline: true },
+                        { name: 'Coin Reward', value: `${mission.coinReward} coins`, inline: true },
+                        { name: 'Mission ID', value: missionId, inline: false },
+                        { name: 'Status', value: 'Accepted', inline: true },
+                        { name: 'Accepted By', value: interaction.user.username, inline: true }
+                    )
+                    .setFooter({ text: 'Post proof in mission-proof channel when complete' })
+                    .setTimestamp();
+
+                await interaction.update({ 
+                    embeds: [acceptedEmbed], 
+                    components: [] // Remove buttons
+                });
+
+                // Send confirmation to user
+                try {
+                    const userDM = await client.users.fetch(interaction.user.id);
+                    await userDM.send({ 
+                        content: `✅ You have accepted mission **${missionId}**!\n\nPost your proof in the mission-proof channel when you complete it.`
+                    });
+                } catch (dmError) {
+                    console.log(`Could not send DM to user ${interaction.user.username}:`, dmError.message);
+                }
+
+            } else {
+                // Decline the mission (just acknowledge, don't change mission status)
+                await interaction.reply({ 
+                    content: '❌ You have declined this mission.', 
+                    ephemeral: true 
+                });
+            }
+        }
+
+        // Handle mission reward claim button
+        if (customId.startsWith('mission_claim_')) {
+            const missionId = customId.split('_')[2];
+            const mission = missions[missionId];
+
+            if (!mission) {
+                await interaction.reply({ content: '❌ Mission not found.', ephemeral: true });
+                return;
+            }
+
+            // Check if user is the one who accepted the mission
+            if (mission.acceptedBy !== interaction.user.id) {
+                await interaction.reply({ content: '❌ You did not accept this mission!', ephemeral: true });
+                return;
+            }
+
+            // Check if proof was approved
+            if (mission.status !== 'proof_approved') {
+                await interaction.reply({ content: '❌ Your proof has not been approved yet!', ephemeral: true });
+                return;
+            }
+
+            // Check if reward already claimed
+            if (mission.rewardClaimed) {
+                await interaction.reply({ content: '❌ You have already claimed this reward!', ephemeral: true });
+                return;
+            }
+
+            // Award coins
+            coins[interaction.user.id] = (coins[interaction.user.id] || 0) + mission.coinReward;
+            saveCoinsData();
+
+            // Mark reward as claimed
+            missions[missionId].rewardClaimed = true;
+            missions[missionId].rewardClaimedAt = new Date().toISOString();
+            saveMissionData();
+
+            const userCoins = coins[interaction.user.id];
+
+            const claimEmbed = new EmbedBuilder()
+                .setColor(0x00FF00)
+                .setTitle('✅ Reward Claimed!')
+                .setDescription(`You have claimed your reward for mission **${missionId}**!`)
+                .addFields(
+                    { name: '💰 Coins Awarded', value: `+${mission.coinReward}`, inline: true },
+                    { name: 'Total Coins', value: userCoins.toString(), inline: true },
+                    { name: 'Mission ID', value: missionId, inline: false }
+                )
+                .setTimestamp();
+
+            await interaction.update({ 
+                embeds: [claimEmbed], 
+                components: [] // Remove claim button
+            });
+
+            // Send DM confirmation
+            try {
+                const userDM = await client.users.fetch(interaction.user.id);
+                await userDM.send({ embeds: [claimEmbed] });
+            } catch (dmError) {
+                console.log(`Could not send DM to user ${interaction.user.username}:`, dmError.message);
+            }
+        }
+
         // Handle bounty approval buttons
         if (customId.startsWith('bounty_approve_') || customId.startsWith('bounty_reject_')) {
             const bountyId = customId.split('_')[2];
@@ -3338,77 +3475,8 @@ client.on(Events.MessageReactionAdd, async (reaction, user) => {
         const member = await guild.members.fetch(user.id);
         if (!member) return;
 
-        // Handle mission acceptance (✅ reaction on mission board)
+        // Handle mission proof approval (✅ reaction on mission-proof channel)
         if (reaction.emoji.name === '✅') {
-            const missionBoardChannelId = config.MISSION_BOARD_CHANNEL_ID;
-            if (missionBoardChannelId && channel.id === missionBoardChannelId) {
-                // This is a mission board message - handle mission acceptance
-                if (message.embeds.length > 0) {
-                    const embed = message.embeds[0];
-                    let missionId = null;
-
-                    // Find Mission ID in embed fields
-                    if (embed.fields) {
-                        const missionIdField = embed.fields.find(field => 
-                            field.name.toLowerCase().includes('mission id')
-                        );
-                        if (missionIdField) {
-                            missionId = missionIdField.value.trim();
-                        }
-                    }
-
-                    if (missionId && missions[missionId]) {
-                        const mission = missions[missionId];
-                        
-                        // Check if mission is still active and not already accepted
-                        if (mission.status === 'active' && !mission.acceptedBy) {
-                            // Accept the mission
-                            missions[missionId].status = 'accepted';
-                            missions[missionId].acceptedBy = user.id;
-                            missions[missionId].acceptedByName = user.username;
-                            missions[missionId].acceptedAt = new Date().toISOString();
-                            saveMissionData();
-
-                            // Update mission message
-                            const acceptedEmbed = new EmbedBuilder()
-                                .setColor(mission.difficulty === 'Easy' ? 0x4CAF50 : mission.difficulty === 'Normal' ? 0xFF9800 : 0xF44336)
-                                .setTitle(`📋 Mission: ${mission.difficulty} [ACCEPTED]`)
-                                .setDescription(mission.description)
-                                .addFields(
-                                    { name: 'Difficulty', value: mission.difficulty, inline: true },
-                                    { name: 'Coin Reward', value: `${mission.coinReward} coins`, inline: true },
-                                    { name: 'Prize', value: mission.prize, inline: false },
-                                    { name: 'Mission ID', value: missionId, inline: false },
-                                    { name: 'Status', value: 'Accepted', inline: true },
-                                    { name: 'Accepted By', value: user.username, inline: true }
-                                )
-                                .setFooter({ text: 'Post proof in mission-proof channel when complete' })
-                                .setTimestamp();
-
-                            await message.edit({ embeds: [acceptedEmbed] });
-                            
-                            // Remove the reaction to prevent multiple accepts
-                            await reaction.remove();
-                            
-                            // Send confirmation to user
-                            try {
-                                const userDM = await client.users.fetch(user.id);
-                                await userDM.send({ 
-                                    content: `✅ You have accepted mission **${missionId}**!\n\nPost your proof in the mission-proof channel when you complete it.`
-                                });
-                            } catch (dmError) {
-                                console.log(`Could not send DM to user ${user.username}:`, dmError.message);
-                            }
-                        } else if (mission.acceptedBy && mission.acceptedBy !== user.id) {
-                            // Mission already accepted by someone else
-                            await reaction.remove();
-                        }
-                    }
-                    return;
-                }
-            }
-
-            // Handle mission proof approval (✅ reaction on mission-proof channel)
             const missionProofChannelId = config.MISSION_PROOF_CHANNEL_ID;
             if (missionProofChannelId && channel.id === missionProofChannelId) {
                 // Check if user is grandmaster or has Executive role
@@ -3453,54 +3521,65 @@ client.on(Events.MessageReactionAdd, async (reaction, user) => {
                     }
                 }
 
-                // If we found a mission ID, approve the mission
+                // If we found a mission ID, approve the proof
                 if (missionId && missions[missionId]) {
                     const mission = missions[missionId];
                     
-                    // Check if mission was accepted by this user
+                    // Check if mission was accepted by this user and proof not already approved
                     if (mission.acceptedBy === completedByUserId && mission.status === 'accepted') {
-                        // Award coins
-                        coins[completedByUserId] = (coins[completedByUserId] || 0) + mission.coinReward;
-                        saveCoinsData();
-
-                        // Update mission status
-                        missions[missionId].status = 'completed';
-                        missions[missionId].completedAt = new Date().toISOString();
+                        // Update mission status to proof_approved (reward can now be claimed)
+                        missions[missionId].status = 'proof_approved';
+                        missions[missionId].proofApprovedAt = new Date().toISOString();
                         missions[missionId].approvedBy = user.id;
                         missions[missionId].approvedByName = user.username;
                         saveMissionData();
 
-                        const userCoins = coins[completedByUserId];
-
-                        // Create completed mission embed
-                        const completedEmbed = new EmbedBuilder()
+                        // Create proof approved embed with claim button
+                        const approvedEmbed = new EmbedBuilder()
                             .setColor(0x00FF00)
-                            .setTitle('✅ Mission Completed!')
-                            .setDescription(`**${completedByUsername}** has successfully completed a mission!`)
+                            .setTitle('✅ Mission Proof Approved!')
+                            .setDescription(`**${completedByUsername}**'s proof has been approved!`)
                             .addFields(
-                                { name: '💰 Coins Awarded', value: `+${mission.coinReward}`, inline: true },
-                                { name: 'Total Coins', value: userCoins.toString(), inline: true },
-                                { name: 'Approved By', value: `<@${user.id}> (${user.username})`, inline: true },
                                 { name: 'Mission ID', value: missionId, inline: false },
                                 { name: 'Difficulty', value: mission.difficulty, inline: true },
-                                { name: 'Prize', value: mission.prize, inline: false }
+                                { name: 'Coin Reward', value: `${mission.coinReward} coins`, inline: true },
+                                { name: 'Approved By', value: `<@${user.id}> (${user.username})`, inline: true }
                             )
-                            .setTimestamp()
-                            .setFooter({ text: 'ShadowBot' });
+                            .setFooter({ text: 'Click the button below to claim your reward' })
+                            .setTimestamp();
 
-                        // Send DM to the user who completed the mission
+                        const claimButton = new ButtonBuilder()
+                            .setCustomId(`mission_claim_${missionId}`)
+                            .setLabel('💰 Claim Reward')
+                            .setStyle(ButtonStyle.Success);
+
+                        const row = new ActionRowBuilder()
+                            .addComponents(claimButton);
+
+                        // Send DM to the user with claim button
                         try {
                             const completedUser = await client.users.fetch(completedByUserId);
-                            await completedUser.send({ embeds: [completedEmbed] });
+                            await completedUser.send({ 
+                                embeds: [approvedEmbed],
+                                components: [row]
+                            });
                         } catch (dmError) {
                             console.log(`Could not send DM to user ${completedByUsername}:`, dmError.message);
                         }
+
+                        // Also reply to the proof message
+                        await message.reply({ 
+                            embeds: [approvedEmbed],
+                            components: [row]
+                        });
                     }
                 }
                 return;
             }
+        }
 
-            // Handle bounty proof approval (existing code)
+        // Handle bounty proof approval (existing code)
+        if (reaction.emoji.name === '✅') {
             const bountyProofChannelId = config.BOUNTY_PROOF_CHANNEL_ID || config.NOTIFICATION_CHANNEL_ID;
             if (bountyProofChannelId && channel.id === bountyProofChannelId) {
                 // Check if user is grandmaster or has Executive role
