@@ -65,3 +65,4 @@ jspm_packages/
 ehthumbs.db
 Thumbs.db
 data/*.json
+"data/*.json" 
