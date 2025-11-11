@@ -46,5 +46,57 @@
     "endTime": "2025-11-10T19:03:17.479Z",
     "status": "ended",
     "participants": []
+  },
+  "mhv5o1rsclbimbg9p2": {
+    "id": "mhv5o1rsclbimbg9p2",
+    "prize": "10",
+    "duration": 2,
+    "winners": 2,
+    "creator": "1379522727857098943",
+    "creatorName": "jourson218_",
+    "createdAt": "2025-11-11T22:41:21.401Z",
+    "endTime": "2025-11-11T22:43:21.401Z",
+    "status": "ended",
+    "participants": []
+  },
+  "mhv672re51mevbsk6gk": {
+    "id": "mhv672re51mevbsk6gk",
+    "prize": "10",
+    "duration": 1,
+    "winners": 2,
+    "creator": "1379522727857098943",
+    "creatorName": "jourson218_",
+    "createdAt": "2025-11-11T22:56:13.661Z",
+    "endTime": "2025-11-11T22:57:09.146Z",
+    "status": "ended",
+    "participants": [
+      "366364092039954432"
+    ],
+    "messageId": "1437938993634476134",
+    "channelId": "1433919143970607294",
+    "winnerIds": [
+      "366364092039954432"
+    ]
+  },
+  "mhv6dv4m2o8irqqoisx": {
+    "id": "mhv6dv4m2o8irqqoisx",
+    "prize": "10",
+    "duration": 1,
+    "winners": 3,
+    "creator": "1379522727857098943",
+    "creatorName": "jourson218_",
+    "createdAt": "2025-11-11T23:01:30.361Z",
+    "endTime": "2025-11-11T23:02:25.846Z",
+    "status": "ended",
+    "participants": [
+      "366364092039954432",
+      "1379522727857098943"
+    ],
+    "messageId": "1437940322037530777",
+    "channelId": "1433919143970607294",
+    "winnerIds": [
+      "1379522727857098943",
+      "366364092039954432"
+    ]
   }
 }

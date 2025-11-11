@@ -111,7 +111,7 @@ const commands = [
     // Poll system
     new SlashCommandBuilder()
         .setName('pollcreate')
-        .setDescription('Create a poll (Executive+ only)')
+        .setDescription('Create a poll (Executive & Grandmaster only)')
         .addStringOption(option =>
             option.setName('question')
                 .setDescription('Poll question')

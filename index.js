@@ -958,7 +958,7 @@ function isExpertOrHigher(member) {
 }
 
 function isExecutiveOrHigher(member) {
-    return hasRole(member, 'Executive') || isGrandmaster(member);
+    return hasRole(member, 'Executive') || hasRole(member, 'Grandmaster') || isGrandmaster(member);
 }
 
 function isExecutivePlus(member) {
@@ -1824,7 +1824,7 @@ client.on(Events.InteractionCreate, async interaction => {
         // Poll system
         else if (commandName === 'pollcreate') {
             if (!isExecutiveOrHigher(interaction.member)) {
-                await interaction.reply({ content: '❌ Only Executive+ can create polls!', ephemeral: true });
+                await interaction.reply({ content: '❌ Only Executives and Grandmasters can create polls!', ephemeral: true });
                 return;
             }
 
@@ -2509,20 +2509,6 @@ client.on(Events.InteractionCreate, async interaction => {
             const giveawayId = generateId();
             const endTime = new Date(Date.now() + duration * 60000);
 
-            giveaways[giveawayId] = {
-                id: giveawayId,
-                prize,
-                duration,
-                winners,
-                creator: userId,
-                creatorName: interaction.user.username,
-                createdAt: new Date().toISOString(),
-                endTime: endTime.toISOString(),
-                status: 'active',
-                participants: []
-            };
-            saveGiveawayData();
-
             const giveawayEmbed = new EmbedBuilder()
                 .setColor(0xFF9800)
                 .setTitle('🎉 Giveaway Started!')
@@ -2538,23 +2524,79 @@ client.on(Events.InteractionCreate, async interaction => {
             const giveawayMessage = await interaction.reply({ embeds: [giveawayEmbed], fetchReply: true });
             await giveawayMessage.react('🎉');
 
+            giveaways[giveawayId] = {
+                id: giveawayId,
+                prize,
+                duration,
+                winners,
+                creator: userId,
+                creatorName: interaction.user.username,
+                createdAt: new Date().toISOString(),
+                endTime: endTime.toISOString(),
+                status: 'active',
+                participants: [],
+                messageId: giveawayMessage.id,
+                channelId: giveawayMessage.channel.id
+            };
+            saveGiveawayData();
+
             // Set timeout to end giveaway
             setTimeout(async () => {
                 const giveaway = giveaways[giveawayId];
                 if (giveaway && giveaway.status === 'active') {
-                    giveaway.status = 'ended';
-                    saveGiveawayData();
+                    try {
+                        // Fetch the message to get all reactions
+                        const channel = await client.channels.fetch(giveaway.channelId);
+                        const message = await channel.messages.fetch(giveaway.messageId);
+                        
+                        // Get all users who reacted with 🎉
+                        const reaction = message.reactions.cache.get('🎉');
+                        let participantIds = [];
+                        
+                        if (reaction) {
+                            const users = await reaction.users.fetch();
+                            participantIds = Array.from(users.keys()).filter(id => !users.get(id).bot);
+                        }
+                        
+                        // Select winners
+                        let selectedWinners = [];
+                        const numWinners = Math.min(giveaway.winners, participantIds.length);
+                        
+                        if (numWinners > 0) {
+                            // Shuffle and select winners
+                            const shuffled = [...participantIds].sort(() => Math.random() - 0.5);
+                            selectedWinners = shuffled.slice(0, numWinners);
+                        }
+                        
+                        giveaway.status = 'ended';
+                        giveaway.participants = participantIds;
+                        giveaway.winnerIds = selectedWinners;
+                        saveGiveawayData();
 
-                    const endEmbed = new EmbedBuilder()
-                        .setColor(0x4CAF50)
-                        .setTitle('🎉 Giveaway Ended!')
-                        .setDescription(`**${prize}**`)
-                        .addFields(
-                            { name: 'Participants', value: giveaway.participants.length.toString(), inline: true }
-                        )
-                        .setTimestamp();
+                        const endEmbed = new EmbedBuilder()
+                            .setColor(0x4CAF50)
+                            .setTitle('🎉 Giveaway Ended!')
+                            .setDescription(`**${prize}**`)
+                            .addFields(
+                                { name: 'Participants', value: participantIds.length.toString(), inline: true },
+                                { name: 'Winners', value: numWinners.toString(), inline: true }
+                            )
+                            .setTimestamp();
 
-                    await giveawayMessage.edit({ embeds: [endEmbed] });
+                        // Add winners to embed
+                        if (selectedWinners.length > 0) {
+                            const winnerMentions = selectedWinners.map(id => `<@${id}>`).join(', ');
+                            endEmbed.addFields({ name: '🎊 Winners:', value: winnerMentions, inline: false });
+                        } else {
+                            endEmbed.addFields({ name: '🎊 Winners:', value: 'No participants entered!', inline: false });
+                        }
+
+                        await message.edit({ embeds: [endEmbed] });
+                    } catch (error) {
+                        console.error('Error ending giveaway:', error);
+                        giveaway.status = 'ended';
+                        saveGiveawayData();
+                    }
                 }
             }, duration * 60000);
         }
