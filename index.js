@@ -3721,6 +3721,69 @@ client.on(Events.InteractionCreate, async interaction => {
     }
 });
 
+// Handle new messages in mission proof channel - automatically add reaction
+client.on(Events.MessageCreate, async (message) => {
+    try {
+        // Ignore bot messages
+        if (message.author.bot) return;
+
+        // Check if message is in mission proof channel
+        const missionProofChannelId = config.MISSION_PROOF_CHANNEL_ID;
+        if (!missionProofChannelId || message.channel.id !== missionProofChannelId) return;
+
+        // Find mission ID from message
+        let missionId = null;
+
+        // Check if message has embeds
+        if (message.embeds.length > 0) {
+            const embed = message.embeds[0];
+            if (embed.fields) {
+                const missionIdField = embed.fields.find(field => 
+                    field.name.toLowerCase().includes('mission id')
+                );
+                if (missionIdField) {
+                    missionId = missionIdField.value.trim();
+                }
+            }
+            if (!missionId) {
+                const description = embed.description || '';
+                const title = embed.title || '';
+                const missionIdMatch = (description + ' ' + title).match(/mission[_\s-]?id[:\s]*([a-z0-9]+)/i);
+                if (missionIdMatch) {
+                    missionId = missionIdMatch[1];
+                }
+            }
+        }
+
+        // Also check message content for mission ID
+        if (!missionId && message.content) {
+            // First try the standard pattern: "Mission ID: xyz" or "mission id xyz"
+            const missionIdMatch = message.content.match(/mission[_\s-]?id[:\s]*([a-z0-9]+)/i);
+            if (missionIdMatch) {
+                missionId = missionIdMatch[1];
+            } else {
+                // Check if any word in the message matches an existing mission ID
+                // This handles cases where user just types the mission ID directly
+                const words = message.content.trim().split(/\s+/);
+                for (const word of words) {
+                    const cleanWord = word.replace(/[^\w]/g, ''); // Remove punctuation
+                    if (cleanWord && missions[cleanWord]) {
+                        missionId = cleanWord;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // If we found a mission ID and it exists in missions, add reaction
+        if (missionId && missions[missionId]) {
+            await message.react('✅');
+        }
+    } catch (error) {
+        console.error('Error handling message create in mission proof channel:', error);
+    }
+});
+
 // Handle message reactions (for bounty proof approval)
 client.on(Events.MessageReactionAdd, async (reaction, user) => {
     try {
@@ -3780,20 +3843,39 @@ client.on(Events.MessageReactionAdd, async (reaction, user) => {
 
                 // Also check message content for mission ID
                 if (!missionId && message.content) {
+                    // First try the standard pattern: "Mission ID: xyz" or "mission id xyz"
                     const missionIdMatch = message.content.match(/mission[_\s-]?id[:\s]*([a-z0-9]+)/i);
                     if (missionIdMatch) {
                         missionId = missionIdMatch[1];
+                    } else {
+                        // Check if any word in the message matches an existing mission ID
+                        // This handles cases where user just types the mission ID directly
+                        const words = message.content.trim().split(/\s+/);
+                        for (const word of words) {
+                            const cleanWord = word.replace(/[^\w]/g, ''); // Remove punctuation
+                            if (cleanWord && missions[cleanWord]) {
+                                missionId = cleanWord;
+                                break;
+                            }
+                        }
                     }
                 }
 
                 // If we found a mission ID, approve the proof
-                if (missionId && missions[missionId]) {
+                if (missionId) {
+                    if (!missions[missionId]) {
+                        console.log(`Mission ID ${missionId} not found in missions database`);
+                        return;
+                    }
+                    
                     const mission = missions[missionId];
+                    console.log(`Processing mission proof approval: missionId=${missionId}, acceptedBy=${mission.acceptedBy}, completedBy=${completedByUserId}, status=${mission.status}`);
                     
                     // Check if mission was accepted by this user
                     if (mission.acceptedBy === completedByUserId) {
                         // Check if reward already claimed
                         if (mission.rewardClaimed) {
+                            console.log(`Mission ${missionId} reward already claimed, ignoring`);
                             return; // Already processed, ignore
                         }
 
@@ -3842,12 +3924,31 @@ client.on(Events.MessageReactionAdd, async (reaction, user) => {
                                 console.log(`Could not send DM to user ${completedByUsername}:`, dmError.message);
                             }
 
-                            // Also reply to the proof message
-                            await message.reply({ 
-                                embeds: [approvedEmbed]
-                            });
+                            // Reply to the proof message in the mission proof channel
+                            try {
+                                await message.reply({ 
+                                    embeds: [approvedEmbed]
+                                });
+                                console.log(`Mission proof approved: ${missionId} by ${user.username}`);
+                            } catch (replyError) {
+                                console.error('Error replying to mission proof message:', replyError);
+                                // Try sending as a regular message if reply fails
+                                try {
+                                    await channel.send({ 
+                                        embeds: [approvedEmbed]
+                                    });
+                                } catch (sendError) {
+                                    console.error('Error sending mission proof approval embed:', sendError);
+                                }
+                            }
+                        } else {
+                            console.log(`Mission ${missionId} status is ${mission.status}, not awarding coins`);
                         }
+                    } else {
+                        console.log(`Mission ${missionId} was not accepted by ${completedByUsername} (${completedByUserId}), it was accepted by ${mission.acceptedByName || 'unknown'}`);
                     }
+                } else {
+                    console.log(`No mission ID found in message from ${completedByUsername}`);
                 }
                 return;
             }
