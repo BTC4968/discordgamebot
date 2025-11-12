@@ -704,7 +704,7 @@ const commands = [
                 .setDescription('Duration in minutes')
                 .setRequired(true)
                 .setMinValue(1)
-                .setMaxValue(1440))
+                .setMaxValue(4320))
         .addIntegerOption(option =>
             option.setName('winners')
                 .setDescription('Number of winners')
