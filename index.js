@@ -3567,53 +3567,63 @@ client.on(Events.MessageReactionAdd, async (reaction, user) => {
                 if (missionId && missions[missionId]) {
                     const mission = missions[missionId];
                     
-                    // Check if mission was accepted by this user and proof not already approved
-                    if (mission.acceptedBy === completedByUserId && mission.status === 'accepted') {
-                        // Update mission status to proof_approved (reward can now be claimed)
-                        missions[missionId].status = 'proof_approved';
-                        missions[missionId].proofApprovedAt = new Date().toISOString();
-                        missions[missionId].approvedBy = user.id;
-                        missions[missionId].approvedByName = user.username;
-                        saveMissionData();
-
-                        // Create proof approved embed with claim button
-                        const approvedEmbed = new EmbedBuilder()
-                            .setColor(0x00FF00)
-                            .setTitle('✅ Mission Proof Approved!')
-                            .setDescription(`**${completedByUsername}**'s proof has been approved!`)
-                            .addFields(
-                                { name: 'Mission ID', value: missionId, inline: false },
-                                { name: 'Difficulty', value: mission.difficulty, inline: true },
-                                { name: 'Coin Reward', value: `${mission.coinReward} coins`, inline: true },
-                                { name: 'Approved By', value: `<@${user.id}> (${user.username})`, inline: true }
-                            )
-                            .setFooter({ text: 'Click the button below to claim your reward' })
-                            .setTimestamp();
-
-                        const claimButton = new ButtonBuilder()
-                            .setCustomId(`mission_claim_${missionId}`)
-                            .setLabel('💰 Claim Reward')
-                            .setStyle(ButtonStyle.Success);
-
-                        const row = new ActionRowBuilder()
-                            .addComponents(claimButton);
-
-                        // Send DM to the user with claim button
-                        try {
-                            const completedUser = await client.users.fetch(completedByUserId);
-                            await completedUser.send({ 
-                                embeds: [approvedEmbed],
-                                components: [row]
-                            });
-                        } catch (dmError) {
-                            console.log(`Could not send DM to user ${completedByUsername}:`, dmError.message);
+                    // Check if mission was accepted by this user
+                    if (mission.acceptedBy === completedByUserId) {
+                        // Check if reward already claimed
+                        if (mission.rewardClaimed) {
+                            return; // Already processed, ignore
                         }
 
-                        // Also reply to the proof message
-                        await message.reply({ 
-                            embeds: [approvedEmbed],
-                            components: [row]
-                        });
+                        // Handle both 'accepted' status and 'proof_approved' status (in case proof was approved but coins not awarded)
+                        const shouldAwardCoins = mission.status === 'accepted' || mission.status === 'proof_approved';
+                        
+                        if (shouldAwardCoins) {
+                            // Award coins immediately
+                            coins[completedByUserId] = (coins[completedByUserId] || 0) + mission.coinReward;
+                            saveCoinsData();
+
+                            // Get user's current coin balance
+                            const userCoins = coins[completedByUserId];
+
+                            // Update mission status to proof_approved and mark reward as claimed
+                            missions[missionId].status = 'proof_approved';
+                            missions[missionId].proofApprovedAt = new Date().toISOString();
+                            missions[missionId].approvedBy = user.id;
+                            missions[missionId].approvedByName = user.username;
+                            missions[missionId].rewardClaimed = true;
+                            missions[missionId].rewardClaimedAt = new Date().toISOString();
+                            saveMissionData();
+
+                            // Create proof approved embed showing coins were awarded
+                            const approvedEmbed = new EmbedBuilder()
+                                .setColor(0x00FF00)
+                                .setTitle('✅ Mission Proof Approved!')
+                                .setDescription(`**${completedByUsername}**'s proof has been approved and coins have been awarded!`)
+                                .addFields(
+                                    { name: 'Mission ID', value: missionId, inline: false },
+                                    { name: 'Difficulty', value: mission.difficulty, inline: true },
+                                    { name: '💰 Coins Awarded', value: `+${mission.coinReward}`, inline: true },
+                                    { name: 'Total Coins', value: userCoins.toString(), inline: true },
+                                    { name: 'Approved By', value: `<@${user.id}> (${user.username})`, inline: true }
+                                )
+                                .setFooter({ text: 'Coins have been automatically added to your balance' })
+                                .setTimestamp();
+
+                            // Send DM to the user
+                            try {
+                                const completedUser = await client.users.fetch(completedByUserId);
+                                await completedUser.send({ 
+                                    embeds: [approvedEmbed]
+                                });
+                            } catch (dmError) {
+                                console.log(`Could not send DM to user ${completedByUsername}:`, dmError.message);
+                            }
+
+                            // Also reply to the proof message
+                            await message.reply({ 
+                                embeds: [approvedEmbed]
+                            });
+                        }
                     }
                 }
                 return;
