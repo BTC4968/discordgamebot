@@ -594,9 +594,9 @@ const commands = [
         .setDescription('Check your current raid points'),
     
     // Leaders
-    new SlashCommandBuilder()
-        .setName('leaders')
-        .setDescription('View current clan leaders'),
+    // new SlashCommandBuilder()
+    //     .setName('leaders')
+    //     .setDescription('View current clan leaders'),
     
     // Apprentice system
     new SlashCommandBuilder()
@@ -1070,7 +1070,7 @@ client.on(Events.InteractionCreate, async interaction => {
                     { name: '📝 Apprentice System', value: '/apprenticerequest', inline: true },
                     { name: '🤝 Alliance System', value: '/setalliance\n/alliances\n/deletealliance', inline: true },
                     { name: '📊 Polls & Giveaways', value: '/pollcreate\n/giveaway', inline: true },
-                    { name: '👑 Leadership', value: '/leaders', inline: true },
+                    // { name: '👑 Leadership', value: '/leaders', inline: true },
                     { name: '🎵 Music', value: '/play', inline: true },
                     { name: '💰 Coin Economy', value: '/flip\n/rob\n/giftcoins', inline: true },
                     { name: '🛠️ Admin Commands', value: '/assigndivision\n/assignrole\n/promote\n/deleteall\n/deletelast10\n/ban\n/kick', inline: true },
@@ -2082,23 +2082,23 @@ client.on(Events.InteractionCreate, async interaction => {
         }
 
         // Leaders
-        else if (commandName === 'leaders') {
-            const leadersEmbed = new EmbedBuilder()
-                .setColor(0x9932CC)
-                .setTitle('👑 Clan Leaders')
-                .setDescription('Current leadership structure')
-                .setTimestamp()
-                .setFooter({ text: 'ShadowBot' });
+        // else if (commandName === 'leaders') {
+        //     const leadersEmbed = new EmbedBuilder()
+        //         .setColor(0x9932CC)
+        //         .setTitle('👑 Clan Leaders')
+        //         .setDescription('Current leadership structure')
+        //         .setTimestamp()
+        //         .setFooter({ text: 'ShadowBot' });
 
-            // This would be populated with actual leader data
-            leadersEmbed.addFields(
-                { name: 'Grandmaster', value: 'To be assigned', inline: true },
-                // { name: 'Elders', value: 'To be assigned', inline: true },
-                // { name: 'Masters', value: 'To be assigned', inline: true }
-            );
+        //     // This would be populated with actual leader data
+        //     leadersEmbed.addFields(
+        //         { name: 'Grandmaster', value: 'To be assigned', inline: true },
+        //         // { name: 'Elders', value: 'To be assigned', inline: true },
+        //         // { name: 'Masters', value: 'To be assigned', inline: true }
+        //     );
 
-            await interaction.reply({ embeds: [leadersEmbed] });
-        }
+        //     await interaction.reply({ embeds: [leadersEmbed] });
+        // }
 
         // Apprentice system
         else if (commandName === 'apprenticerequest') {

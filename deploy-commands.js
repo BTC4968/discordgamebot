@@ -140,9 +140,9 @@ const commands = [
         .setDescription('Check your current raid points'),
     
     // Leaders
-    new SlashCommandBuilder()
-        .setName('leaders')
-        .setDescription('View current clan leaders'),
+    // new SlashCommandBuilder()
+    //     .setName('leaders')
+    //     .setDescription('View current clan leaders'),
     
     // Apprentice system
     new SlashCommandBuilder()
