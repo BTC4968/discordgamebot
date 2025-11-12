@@ -365,7 +365,46 @@ const commands = [
         .addStringOption(option =>
             option.setName('reason')
                 .setDescription('Reason for the kick')
-                .setRequired(false))
+                .setRequired(false)),
+
+    // Coin economy commands
+    new SlashCommandBuilder()
+        .setName('flip')
+        .setDescription('Place a bet and flip heads or tails')
+        .addIntegerOption(option =>
+            option.setName('bet')
+                .setDescription('Amount of coins to bet')
+                .setRequired(true)
+                .setMinValue(1))
+        .addStringOption(option =>
+            option.setName('choice')
+                .setDescription('Choose heads or tails')
+                .setRequired(true)
+                .addChoices(
+                    { name: 'Heads', value: 'heads' },
+                    { name: 'Tails', value: 'tails' }
+                )),
+
+    new SlashCommandBuilder()
+        .setName('rob')
+        .setDescription('Attempt to steal a random amount of coins from a user')
+        .addUserOption(option =>
+            option.setName('user')
+                .setDescription('User to rob')
+                .setRequired(true)),
+
+    new SlashCommandBuilder()
+        .setName('giftcoins')
+        .setDescription('Send coins to a user')
+        .addUserOption(option =>
+            option.setName('user')
+                .setDescription('User to send coins to')
+                .setRequired(true))
+        .addIntegerOption(option =>
+            option.setName('amount')
+                .setDescription('Amount of coins to send')
+                .setRequired(true)
+                .setMinValue(1))
 ];
 
 // Register slash commands

@@ -829,7 +829,46 @@ const commands = [
         .addStringOption(option =>
             option.setName('link')
                 .setDescription('YouTube or Spotify link')
+                .setRequired(true)),
+
+    // Coin economy commands
+    new SlashCommandBuilder()
+        .setName('flip')
+        .setDescription('Place a bet and flip heads or tails')
+        .addIntegerOption(option =>
+            option.setName('bet')
+                .setDescription('Amount of coins to bet')
+                .setRequired(true)
+                .setMinValue(1))
+        .addStringOption(option =>
+            option.setName('choice')
+                .setDescription('Choose heads or tails')
+                .setRequired(true)
+                .addChoices(
+                    { name: 'Heads', value: 'heads' },
+                    { name: 'Tails', value: 'tails' }
+                )),
+
+    new SlashCommandBuilder()
+        .setName('rob')
+        .setDescription('Attempt to steal a random amount of coins from a user')
+        .addUserOption(option =>
+            option.setName('user')
+                .setDescription('User to rob')
+                .setRequired(true)),
+
+    new SlashCommandBuilder()
+        .setName('giftcoins')
+        .setDescription('Send coins to a user')
+        .addUserOption(option =>
+            option.setName('user')
+                .setDescription('User to send coins to')
                 .setRequired(true))
+        .addIntegerOption(option =>
+            option.setName('amount')
+                .setDescription('Amount of coins to send')
+                .setRequired(true)
+                .setMinValue(1))
 ];
 
 // Register slash commands
@@ -1033,6 +1072,7 @@ client.on(Events.InteractionCreate, async interaction => {
                     { name: '📊 Polls & Giveaways', value: '/pollcreate\n/giveaway', inline: true },
                     { name: '👑 Leadership', value: '/leaders', inline: true },
                     { name: '🎵 Music', value: '/play', inline: true },
+                    { name: '💰 Coin Economy', value: '/flip\n/rob\n/giftcoins', inline: true },
                     { name: '🛠️ Admin Commands', value: '/assigndivision\n/assignrole\n/promote\n/deleteall\n/deletelast10\n/ban\n/kick', inline: true },
                     { name: '📋 Mission System', value: '/sendmission\n/cancelmission', inline: true }
                 )
@@ -2894,6 +2934,189 @@ client.on(Events.InteractionCreate, async interaction => {
                 .setTimestamp();
 
             await interaction.reply({ embeds: [coinsEmbed] });
+        }
+
+        else if (commandName === 'flip') {
+            const betAmount = interaction.options.getInteger('bet');
+            const choice = interaction.options.getString('choice');
+            const userId = interaction.user.id;
+
+            // Initialize if doesn't exist
+            if (!coins[userId]) {
+                coins[userId] = 0;
+            }
+
+            // Check if user has enough coins
+            if (coins[userId] < betAmount) {
+                await interaction.reply({ 
+                    content: `❌ You don't have enough coins! You need ${betAmount} coins but only have ${coins[userId]}.`, 
+                    ephemeral: true 
+                });
+                return;
+            }
+
+            // Deduct bet amount
+            coins[userId] -= betAmount;
+
+            // Flip coin (50/50 chance)
+            const result = Math.random() < 0.5 ? 'heads' : 'tails';
+            const won = choice === result;
+
+            // Calculate winnings (2x bet if won, 0 if lost)
+            if (won) {
+                coins[userId] += betAmount * 2;
+            }
+
+            saveCoinsData();
+
+            const flipEmbed = new EmbedBuilder()
+                .setColor(won ? 0x00FF00 : 0xFF0000)
+                .setTitle(won ? '🎉 You Won!' : '😢 You Lost!')
+                .setDescription(`**Result:** ${result.charAt(0).toUpperCase() + result.slice(1)}\n**Your Choice:** ${choice.charAt(0).toUpperCase() + choice.slice(1)}`)
+                .addFields(
+                    { name: 'Bet Amount', value: betAmount.toString(), inline: true },
+                    { name: 'Winnings', value: won ? `+${betAmount * 2}` : '0', inline: true },
+                    { name: 'Total Coins', value: coins[userId].toString(), inline: true }
+                )
+                .setTimestamp();
+
+            await interaction.reply({ embeds: [flipEmbed] });
+        }
+
+        else if (commandName === 'rob') {
+            const targetUser = interaction.options.getUser('user');
+            const userId = interaction.user.id;
+
+            // Can't rob yourself
+            if (targetUser.id === userId) {
+                await interaction.reply({ 
+                    content: '❌ You cannot rob yourself!', 
+                    ephemeral: true 
+                });
+                return;
+            }
+
+            // Can't rob bots
+            if (targetUser.bot) {
+                await interaction.reply({ 
+                    content: '❌ You cannot rob bots!', 
+                    ephemeral: true 
+                });
+                return;
+            }
+
+            // Initialize if doesn't exist
+            if (!coins[targetUser.id]) {
+                coins[targetUser.id] = 0;
+            }
+            if (!coins[userId]) {
+                coins[userId] = 0;
+            }
+
+            // Check if target has coins
+            if (coins[targetUser.id] === 0) {
+                await interaction.reply({ 
+                    content: `❌ **${targetUser.username}** has no coins to rob!`, 
+                    ephemeral: true 
+                });
+                return;
+            }
+
+            // 40% chance of success
+            const success = Math.random() < 0.4;
+            
+            if (success) {
+                // Steal 10-50% of target's coins (random)
+                const stealPercentage = 0.1 + (Math.random() * 0.4); // 10% to 50%
+                const stolenAmount = Math.floor(coins[targetUser.id] * stealPercentage);
+                
+                // Ensure at least 1 coin is stolen if target has coins
+                const finalStolenAmount = Math.max(1, stolenAmount);
+
+                coins[targetUser.id] -= finalStolenAmount;
+                coins[userId] += finalStolenAmount;
+                saveCoinsData();
+
+                const robEmbed = new EmbedBuilder()
+                    .setColor(0xFF6B35)
+                    .setTitle('💰 Robbery Successful!')
+                    .setDescription(`**${interaction.user.username}** successfully robbed **${finalStolenAmount}** coins from **${targetUser.username}**!`)
+                    .addFields(
+                        { name: 'Stolen Amount', value: finalStolenAmount.toString(), inline: true },
+                        { name: 'Your Coins', value: coins[userId].toString(), inline: true },
+                        { name: `${targetUser.username}'s Remaining Coins`, value: coins[targetUser.id].toString(), inline: true }
+                    )
+                    .setTimestamp();
+
+                await interaction.reply({ embeds: [robEmbed] });
+            } else {
+                // Failed robbery - lose 5% of your coins as penalty (minimum 1)
+                const penalty = Math.max(1, Math.floor(coins[userId] * 0.05));
+                coins[userId] -= penalty;
+                saveCoinsData();
+
+                const robEmbed = new EmbedBuilder()
+                    .setColor(0xFF0000)
+                    .setTitle('🚨 Robbery Failed!')
+                    .setDescription(`**${interaction.user.username}** was caught trying to rob **${targetUser.username}**!`)
+                    .addFields(
+                        { name: 'Penalty', value: `-${penalty} coins`, inline: true },
+                        { name: 'Your Coins', value: coins[userId].toString(), inline: true }
+                    )
+                    .setTimestamp();
+
+                await interaction.reply({ embeds: [robEmbed] });
+            }
+        }
+
+        else if (commandName === 'giftcoins') {
+            const targetUser = interaction.options.getUser('user');
+            const amount = interaction.options.getInteger('amount');
+            const userId = interaction.user.id;
+
+            // Can't gift to yourself
+            if (targetUser.id === userId) {
+                await interaction.reply({ 
+                    content: '❌ You cannot gift coins to yourself!', 
+                    ephemeral: true 
+                });
+                return;
+            }
+
+            // Initialize if doesn't exist
+            if (!coins[userId]) {
+                coins[userId] = 0;
+            }
+            if (!coins[targetUser.id]) {
+                coins[targetUser.id] = 0;
+            }
+
+            // Check if user has enough coins
+            if (coins[userId] < amount) {
+                await interaction.reply({ 
+                    content: `❌ You don't have enough coins! You need ${amount} coins but only have ${coins[userId]}.`, 
+                    ephemeral: true 
+                });
+                return;
+            }
+
+            // Transfer coins
+            coins[userId] -= amount;
+            coins[targetUser.id] += amount;
+            saveCoinsData();
+
+            const giftEmbed = new EmbedBuilder()
+                .setColor(0x00FF00)
+                .setTitle('🎁 Coins Gifted!')
+                .setDescription(`**${interaction.user.username}** sent **${amount}** coins to **${targetUser.username}**!`)
+                .addFields(
+                    { name: 'Amount Sent', value: amount.toString(), inline: true },
+                    { name: 'Your Coins', value: coins[userId].toString(), inline: true },
+                    { name: `${targetUser.username}'s Coins`, value: coins[targetUser.id].toString(), inline: true }
+                )
+                .setTimestamp();
+
+            await interaction.reply({ embeds: [giftEmbed] });
         }
 
         else if (commandName === 'clearpoints') {
