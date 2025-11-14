@@ -15,7 +15,8 @@ const client = new Client({
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
         GatewayIntentBits.GuildMessageReactions,
-        GatewayIntentBits.GuildVoiceStates
+        GatewayIntentBits.GuildVoiceStates,
+        GatewayIntentBits.GuildMembers // Required to see all members in the server
     ]
 });
 
@@ -310,7 +311,13 @@ function saveMissionData() {
 
 function saveGrannyBombData() {
     try {
-        fs.writeFileSync(grannyBombDataFile, JSON.stringify(grannyBombs, null, 2));
+        // Create a copy without timeoutId (not serializable)
+        const dataToSave = {};
+        for (const [id, bomb] of Object.entries(grannyBombs)) {
+            const { timeoutId, ...bombData } = bomb;
+            dataToSave[id] = bombData;
+        }
+        fs.writeFileSync(grannyBombDataFile, JSON.stringify(dataToSave, null, 2));
     } catch (error) {
         console.error('Error saving granny bomb data:', error);
     }
@@ -894,7 +901,11 @@ const commands = [
 
     new SlashCommandBuilder()
         .setName('grannybomb')
-        .setDescription('Drops a bomb on the server (Granny only)')
+        .setDescription('Drops a bomb on the server (Granny only)'),
+
+    new SlashCommandBuilder()
+        .setName('cancelgrannybomb')
+        .setDescription('Cancel an active granny bomb (Granny only)')
 ];
 
 // Register slash commands
@@ -3182,17 +3193,43 @@ client.on(Events.InteractionCreate, async interaction => {
             const grannyName = interaction.user.username;
             const guild = interaction.guild;
 
-            // Get all members from cache (no need to fetch, avoids timeout)
-            const allMembers = guild.members.cache;
+            // Get all members from cache
+            let allMembers = guild.members.cache;
+            
+            // If cache seems too small (less than 10 members), try to fetch more
+            // This handles cases where the bot just started or cache is incomplete
+            if (allMembers.size < 10) {
+                try {
+                    // Try to fetch members with a timeout to avoid hanging
+                    const fetchedMembers = await Promise.race([
+                        guild.members.fetch(),
+                        new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 5000))
+                    ]).catch(() => null);
+                    
+                    if (fetchedMembers) {
+                        allMembers = fetchedMembers;
+                    }
+                } catch (error) {
+                    console.log('Could not fetch members, using cache:', error.message);
+                }
+            }
+
+            // Filter eligible members (not bots, not Granny role, not the Granny user)
             const eligibleMembers = allMembers.filter(member => {
-                return !member.user.bot && 
-                       !hasRole(member, 'Granny') && 
-                       member.id !== grannyId;
+                // Skip bots
+                if (member.user.bot) return false;
+                // Skip the Granny user themselves
+                if (member.id === grannyId) return false;
+                // Skip members with Granny role
+                if (hasRole(member, 'Granny')) return false;
+                return true;
             });
+
+            console.log(`Granny Bomb: Total members in cache: ${allMembers.size}, Eligible members: ${eligibleMembers.size}`);
 
             if (eligibleMembers.size === 0) {
                 await interaction.editReply({ 
-                    content: '❌ No eligible members found to target!'
+                    content: `❌ No eligible members found to target!\n\nTotal members in server: ${allMembers.size}\n\n*Note: The bot needs to see members in the server. Make sure the bot has proper permissions and has been online long enough to cache members.*`
                 });
                 return;
             }
@@ -3238,12 +3275,13 @@ client.on(Events.InteractionCreate, async interaction => {
                 channelId: bombMessage.channel.id,
                 guildId: guild.id,
                 eligibleMemberIds: Array.from(eligibleMembers.keys()),
-                reactions: {} // userId -> 'risk' or 'leave'
+                reactions: {}, // userId -> 'risk' or 'leave'
+                timeoutId: null // Will be set below
             };
             saveGrannyBombData();
 
             // Set timeout to detonate bomb
-            setTimeout(async () => {
+            const timeoutId = setTimeout(async () => {
                 const bomb = grannyBombs[bombId];
                 if (bomb && bomb.status === 'active') {
                     try {
@@ -3367,6 +3405,87 @@ client.on(Events.InteractionCreate, async interaction => {
                     }
                 }
             }, timerMs);
+            
+            // Store the timeout ID so we can cancel it
+            grannyBombs[bombId].timeoutId = timeoutId;
+            saveGrannyBombData();
+        }
+
+        else if (commandName === 'cancelgrannybomb') {
+            // Check if user has Granny role
+            if (!hasRole(interaction.member, 'Granny')) {
+                await interaction.reply({ 
+                    content: '❌ Only users with the Granny role can use this command!', 
+                    ephemeral: true 
+                });
+                return;
+            }
+
+            // Check if command is used in the correct channel
+            const bombChannelId = config.GRANNY_BOMB_CHANNEL_ID;
+            if (bombChannelId && interaction.channel.id !== bombChannelId) {
+                await interaction.reply({ 
+                    content: `❌ This command can only be used in the bomb channel!`, 
+                    ephemeral: true 
+                });
+                return;
+            }
+
+            // Find active bomb
+            const activeBomb = Object.values(grannyBombs).find(bomb => bomb.status === 'active');
+            if (!activeBomb) {
+                await interaction.reply({ 
+                    content: '❌ There is no active bomb to cancel!', 
+                    ephemeral: true 
+                });
+                return;
+            }
+
+            // Check if the user is the one who started the bomb (or allow any Granny)
+            // For now, allow any Granny to cancel
+            await interaction.deferReply();
+
+            try {
+                // Clear the timeout
+                if (activeBomb.timeoutId) {
+                    clearTimeout(activeBomb.timeoutId);
+                }
+
+                // Update bomb status
+                activeBomb.status = 'cancelled';
+                activeBomb.cancelledAt = new Date().toISOString();
+                activeBomb.cancelledBy = interaction.user.id;
+                activeBomb.cancelledByName = interaction.user.username;
+                saveGrannyBombData();
+
+                // Update the bomb message
+                const channel = await client.channels.fetch(activeBomb.channelId);
+                const message = await channel.messages.fetch(activeBomb.messageId);
+                
+                const cancelledEmbed = new EmbedBuilder()
+                    .setColor(0x9E9E9E)
+                    .setTitle('💣 GRANNY BOMB CANCELLED')
+                    .setDescription(`**${activeBomb.grannyName}**'s bomb has been cancelled by **${interaction.user.username}**`)
+                    .addFields(
+                        { name: 'Status', value: 'Cancelled', inline: true },
+                        { name: 'Cancelled By', value: interaction.user.username, inline: true },
+                        { name: 'Original Targets', value: `${activeBomb.eligibleMemberIds.length} members`, inline: true }
+                    )
+                    .setFooter({ text: 'The bomb has been defused!' })
+                    .setTimestamp();
+
+                await message.edit({ embeds: [cancelledEmbed] });
+                await message.reactions.removeAll();
+
+                await interaction.editReply({ 
+                    content: '✅ Granny bomb has been cancelled successfully!'
+                });
+            } catch (error) {
+                console.error('Error cancelling granny bomb:', error);
+                await interaction.editReply({ 
+                    content: '❌ An error occurred while cancelling the bomb!'
+                });
+            }
         }
 
         else if (commandName === 'clearpoints') {

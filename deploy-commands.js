@@ -408,7 +408,11 @@ const commands = [
 
     new SlashCommandBuilder()
         .setName('grannybomb')
-        .setDescription('Drops a bomb on the server (Granny only)')
+        .setDescription('Drops a bomb on the server (Granny only)'),
+
+    new SlashCommandBuilder()
+        .setName('cancelgrannybomb')
+        .setDescription('Cancel an active granny bomb (Granny only)')
 ];
 
 // Register slash commands
