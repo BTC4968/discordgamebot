@@ -404,7 +404,11 @@ const commands = [
             option.setName('amount')
                 .setDescription('Amount of coins to send')
                 .setRequired(true)
-                .setMinValue(1))
+                .setMinValue(1)),
+
+    new SlashCommandBuilder()
+        .setName('grannybomb')
+        .setDescription('Drops a bomb on the server (Granny only)')
 ];
 
 // Register slash commands

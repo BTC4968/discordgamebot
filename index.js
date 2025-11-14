@@ -83,6 +83,10 @@ const divisionDataFile = path.join(__dirname, 'data', 'divisionData.json');
 const missions = {};
 const missionDataFile = path.join(__dirname, 'data', 'missionData.json');
 
+// Granny bomb system data
+const grannyBombs = {};
+const grannyBombDataFile = path.join(__dirname, 'data', 'grannyBombData.json');
+
 // Load all data files
 function loadAllData() {
     // Load challenge data
@@ -196,6 +200,16 @@ function loadAllData() {
             console.error('Error loading mission data:', error);
         }
     }
+
+    // Load granny bomb data
+    if (fs.existsSync(grannyBombDataFile)) {
+        try {
+            const data = JSON.parse(fs.readFileSync(grannyBombDataFile, 'utf8'));
+            Object.assign(grannyBombs, data);
+        } catch (error) {
+            console.error('Error loading granny bomb data:', error);
+        }
+    }
 }
 
 // Load all data on startup
@@ -291,6 +305,14 @@ function saveMissionData() {
         fs.writeFileSync(missionDataFile, JSON.stringify(missions, null, 2));
     } catch (error) {
         console.error('Error saving mission data:', error);
+    }
+}
+
+function saveGrannyBombData() {
+    try {
+        fs.writeFileSync(grannyBombDataFile, JSON.stringify(grannyBombs, null, 2));
+    } catch (error) {
+        console.error('Error saving granny bomb data:', error);
     }
 }
 
@@ -868,7 +890,11 @@ const commands = [
             option.setName('amount')
                 .setDescription('Amount of coins to send')
                 .setRequired(true)
-                .setMinValue(1))
+                .setMinValue(1)),
+
+    new SlashCommandBuilder()
+        .setName('grannybomb')
+        .setDescription('Drops a bomb on the server (Granny only)')
 ];
 
 // Register slash commands
@@ -3117,6 +3143,230 @@ client.on(Events.InteractionCreate, async interaction => {
                 .setTimestamp();
 
             await interaction.reply({ embeds: [giftEmbed] });
+        }
+
+        else if (commandName === 'grannybomb') {
+            // Check if user has Granny role
+            if (!hasRole(interaction.member, 'Granny')) {
+                await interaction.reply({ 
+                    content: '❌ Only users with the Granny role can use this command!', 
+                    ephemeral: true 
+                });
+                return;
+            }
+
+            // Check if command is used in the correct channel
+            const bombChannelId = config.GRANNY_BOMB_CHANNEL_ID;
+            if (bombChannelId && interaction.channel.id !== bombChannelId) {
+                await interaction.reply({ 
+                    content: `❌ This command can only be used in the bomb channel!`, 
+                    ephemeral: true 
+                });
+                return;
+            }
+
+            // Check if there's already an active bomb
+            const activeBomb = Object.values(grannyBombs).find(bomb => bomb.status === 'active');
+            if (activeBomb) {
+                await interaction.reply({ 
+                    content: '❌ There is already an active bomb! Please wait for it to detonate.', 
+                    ephemeral: true 
+                });
+                return;
+            }
+
+            // Defer reply since processing might take time
+            await interaction.deferReply();
+
+            const grannyId = interaction.user.id;
+            const grannyName = interaction.user.username;
+            const guild = interaction.guild;
+
+            // Get all members from cache (no need to fetch, avoids timeout)
+            const allMembers = guild.members.cache;
+            const eligibleMembers = allMembers.filter(member => {
+                return !member.user.bot && 
+                       !hasRole(member, 'Granny') && 
+                       member.id !== grannyId;
+            });
+
+            if (eligibleMembers.size === 0) {
+                await interaction.editReply({ 
+                    content: '❌ No eligible members found to target!'
+                });
+                return;
+            }
+
+            // Generate random timer between 2-3 hours (in milliseconds)
+            const minHours = 2;
+            const maxHours = 3;
+            const randomHours = minHours + Math.random() * (maxHours - minHours);
+            const timerMs = randomHours * 60 * 60 * 1000;
+            const endTime = new Date(Date.now() + timerMs);
+
+            const bombId = generateId();
+
+            // Create bomb embed
+            const bombEmbed = new EmbedBuilder()
+                .setColor(0xFF0000)
+                .setTitle('💣 GRANNY BOMB ACTIVATED!')
+                .setDescription(`**${grannyName}** has dropped a bomb on the server!`)
+                .addFields(
+                    { name: '⏰ Time Remaining', value: `<t:${Math.floor(endTime.getTime() / 1000)}:R>`, inline: true },
+                    { name: '🎯 Targets', value: `${eligibleMembers.size} members`, inline: true },
+                    { name: '⚠️ Action Required', value: 'React with ⚠️ for **Risk** or 🏃 for **Leave**', inline: false }
+                )
+                .setFooter({ text: 'Those who don\'t react will automatically choose Risk!' })
+                .setTimestamp();
+
+            const bombMessage = await interaction.editReply({ embeds: [bombEmbed], fetchReply: true });
+            
+            // Add reactions
+            await bombMessage.react('⚠️'); // Risk
+            await bombMessage.react('🏃'); // Leave
+
+            // Store bomb data
+            grannyBombs[bombId] = {
+                id: bombId,
+                grannyId: grannyId,
+                grannyName: grannyName,
+                createdAt: new Date().toISOString(),
+                endTime: endTime.toISOString(),
+                timerMs: timerMs,
+                status: 'active',
+                messageId: bombMessage.id,
+                channelId: bombMessage.channel.id,
+                guildId: guild.id,
+                eligibleMemberIds: Array.from(eligibleMembers.keys()),
+                reactions: {} // userId -> 'risk' or 'leave'
+            };
+            saveGrannyBombData();
+
+            // Set timeout to detonate bomb
+            setTimeout(async () => {
+                const bomb = grannyBombs[bombId];
+                if (bomb && bomb.status === 'active') {
+                    try {
+                        // Fetch the message to get all reactions
+                        const channel = await client.channels.fetch(bomb.channelId);
+                        const message = await channel.messages.fetch(bomb.messageId);
+                        
+                        // Get all users who reacted
+                        const riskReaction = message.reactions.cache.get('⚠️');
+                        const leaveReaction = message.reactions.cache.get('🏃');
+                        
+                        const riskUsers = new Set();
+                        const leaveUsers = new Set();
+                        
+                        if (riskReaction) {
+                            const users = await riskReaction.users.fetch();
+                            users.forEach(user => {
+                                if (!user.bot && bomb.eligibleMemberIds.includes(user.id)) {
+                                    riskUsers.add(user.id);
+                                }
+                            });
+                        }
+                        
+                        if (leaveReaction) {
+                            const users = await leaveReaction.users.fetch();
+                            users.forEach(user => {
+                                if (!user.bot && bomb.eligibleMemberIds.includes(user.id)) {
+                                    leaveUsers.add(user.id);
+                                }
+                            });
+                        }
+                        
+                        // Anyone who didn't react gets Risk by default
+                        const allEligible = new Set(bomb.eligibleMemberIds);
+                        const reactedUsers = new Set([...riskUsers, ...leaveUsers]);
+                        const nonReactedUsers = [...allEligible].filter(id => !reactedUsers.has(id));
+                        nonReactedUsers.forEach(id => riskUsers.add(id));
+                        
+                        // Remove anyone who chose Leave from Risk
+                        leaveUsers.forEach(id => riskUsers.delete(id));
+                        
+                        // Process bomb: take random coins from Risk users and give to Granny
+                        let totalCoinsLost = 0;
+                        const affectedUsers = [];
+                        
+                        // Initialize Granny's coins if needed
+                        if (!coins[bomb.grannyId]) {
+                            coins[bomb.grannyId] = 0;
+                        }
+                        
+                        for (const userId of riskUsers) {
+                            // Initialize user coins if needed
+                            if (!coins[userId]) {
+                                coins[userId] = 0;
+                            }
+                            
+                            // Calculate random coin loss (10-50% of their coins, minimum 1)
+                            const userCoins = coins[userId];
+                            if (userCoins > 0) {
+                                const lossPercent = 0.10 + Math.random() * 0.40; // 10-50%
+                                const coinsLost = Math.max(1, Math.floor(userCoins * lossPercent));
+                                const actualLoss = Math.min(coinsLost, userCoins);
+                                
+                                coins[userId] -= actualLoss;
+                                coins[bomb.grannyId] += actualLoss;
+                                totalCoinsLost += actualLoss;
+                                
+                                affectedUsers.push({
+                                    userId: userId,
+                                    coinsLost: actualLoss,
+                                    remainingCoins: coins[userId]
+                                });
+                            }
+                        }
+                        
+                        saveCoinsData();
+                        
+                        // Update bomb status
+                        bomb.status = 'detonated';
+                        bomb.detonatedAt = new Date().toISOString();
+                        bomb.riskUsers = Array.from(riskUsers);
+                        bomb.leaveUsers = Array.from(leaveUsers);
+                        bomb.totalCoinsLost = totalCoinsLost;
+                        bomb.affectedUsers = affectedUsers;
+                        saveGrannyBombData();
+                        
+                        // Create detonation embed
+                        const detonationEmbed = new EmbedBuilder()
+                            .setColor(0xFF0000)
+                            .setTitle('💥 BOMB DETONATED!')
+                            .setDescription(`The bomb has dropped!`)
+                            .addFields(
+                                { name: '⚠️ Risk Takers', value: riskUsers.size.toString(), inline: true },
+                                { name: '🏃 Safe (Left)', value: leaveUsers.size.toString(), inline: true },
+                                { name: '💰 Total Coins Lost', value: totalCoinsLost.toString(), inline: true },
+                                { name: '🎯 Granny\'s Winnings', value: `${totalCoinsLost} coins`, inline: false }
+                            )
+                            .setTimestamp();
+                        
+                        // Add affected users list if any
+                        if (affectedUsers.length > 0) {
+                            let affectedList = '';
+                            const bombGuild = await client.guilds.fetch(bomb.guildId).catch(() => null);
+                            for (const user of affectedUsers.slice(0, 20)) {
+                                const member = bombGuild ? await bombGuild.members.fetch(user.userId).catch(() => null) : null;
+                                affectedList += `<@${user.userId}>: -${user.coinsLost} coins\n`;
+                            }
+                            if (affectedUsers.length > 20) {
+                                affectedList += `... and ${affectedUsers.length - 20} more`;
+                            }
+                            detonationEmbed.addFields({ name: '💸 Affected Users', value: affectedList || 'None', inline: false });
+                        }
+                        
+                        await message.edit({ embeds: [detonationEmbed] });
+                        await message.reactions.removeAll();
+                        
+                    } catch (error) {
+                        console.error('Error detonating granny bomb:', error);
+                        bomb.status = 'error';
+                        saveGrannyBombData();
+                    }
+                }
+            }, timerMs);
         }
 
         else if (commandName === 'clearpoints') {

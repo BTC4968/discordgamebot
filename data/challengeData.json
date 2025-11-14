@@ -8,16 +8,24 @@
       "rounds": 3,
       "status": "pending",
       "createdAt": "2025-10-26T14:03:59.863Z"
-    },
-    "mhhpiwnuf9q0xlw51z": {
-      "challengerId": "366364092039954432",
-      "targetId": "1182994824459190354",
-      "challengerName": ".viciousss.",
-      "targetName": "katelyn23_",
-      "rounds": 3,
-      "status": "pending",
-      "createdAt": "2025-11-02T12:48:27.354Z"
     }
   },
-  "stats": {}
+  "stats": {
+    "1182994824459190354": {
+      "wins": 1,
+      "losses": 0,
+      "draws": 0,
+      "totalChallenges": 1,
+      "winStreak": 1,
+      "bestWinStreak": 1
+    },
+    "366364092039954432": {
+      "wins": 0,
+      "losses": 1,
+      "draws": 0,
+      "totalChallenges": 1,
+      "winStreak": 0,
+      "bestWinStreak": 0
+    }
+  }
 }

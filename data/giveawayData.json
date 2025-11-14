@@ -113,5 +113,43 @@
     "messageId": "1438204348160151744",
     "channelId": "1433919143970607294",
     "winnerIds": []
+  },
+  "mhy5rzxmkf556gipbnk": {
+    "id": "mhy5rzxmkf556gipbnk",
+    "prize": "10",
+    "duration": 1,
+    "winners": 3,
+    "creator": "1379522727857098943",
+    "creatorName": "jourson218_",
+    "createdAt": "2025-11-14T01:07:48.686Z",
+    "endTime": "2025-11-14T01:08:44.170Z",
+    "status": "ended",
+    "participants": [
+      "1379522727857098943"
+    ],
+    "messageId": "1438696883588567131",
+    "channelId": "1434297043840401508",
+    "winnerIds": [
+      "1379522727857098943"
+    ]
+  },
+  "mhysvxgxnu0sp1hklsa": {
+    "id": "mhysvxgxnu0sp1hklsa",
+    "prize": "10",
+    "duration": 1,
+    "winners": 1,
+    "creator": "1379522727857098943",
+    "creatorName": "jourson218_",
+    "createdAt": "2025-11-14T11:54:41.597Z",
+    "endTime": "2025-11-14T11:55:38.769Z",
+    "status": "ended",
+    "participants": [
+      "1379522727857098943"
+    ],
+    "messageId": "1438859672433201243",
+    "channelId": "1434297043840401508",
+    "winnerIds": [
+      "1379522727857098943"
+    ]
   }
 }
