@@ -367,6 +367,51 @@ const commands = [
                 .setDescription('Reason for the kick')
                 .setRequired(false)),
 
+    // Music commands
+    new SlashCommandBuilder()
+        .setName('musichelp')
+        .setDescription('Shows a list of music commands'),
+    
+    new SlashCommandBuilder()
+        .setName('play')
+        .setDescription('Play a song by URL')
+        .addStringOption(option =>
+            option.setName('link')
+                .setDescription('YouTube or Spotify link')
+                .setRequired(true)),
+    
+    new SlashCommandBuilder()
+        .setName('pause')
+        .setDescription('Pause current song'),
+    
+    new SlashCommandBuilder()
+        .setName('stop')
+        .setDescription('Stop current song'),
+    
+    new SlashCommandBuilder()
+        .setName('skip')
+        .setDescription('Skip to next song'),
+    
+    new SlashCommandBuilder()
+        .setName('queue')
+        .setDescription('Show current song queue'),
+    
+    new SlashCommandBuilder()
+        .setName('clear')
+        .setDescription('Clear current queue'),
+    
+    new SlashCommandBuilder()
+        .setName('leave')
+        .setDescription('Stop playback and leave'),
+    
+    new SlashCommandBuilder()
+        .setName('playing')
+        .setDescription('Show current playing song'),
+    
+    new SlashCommandBuilder()
+        .setName('restart')
+        .setDescription('Restart current playing song'),
+
     // Coin economy commands
     new SlashCommandBuilder()
         .setName('flip')
