@@ -374,44 +374,36 @@ const commands = [
     
     new SlashCommandBuilder()
         .setName('play')
-        .setDescription('Play a song by URL')
+        .setDescription('Play a song from YouTube or Spotify')
         .addStringOption(option =>
-            option.setName('link')
-                .setDescription('YouTube or Spotify link')
+            option.setName('url')
+                .setDescription('Song name, YouTube URL, or Spotify link')
                 .setRequired(true)),
     
     new SlashCommandBuilder()
-        .setName('pause')
-        .setDescription('Pause current song'),
-    
-    new SlashCommandBuilder()
         .setName('stop')
-        .setDescription('Stop current song'),
+        .setDescription('Stop the music and clear the queue'),
     
     new SlashCommandBuilder()
         .setName('skip')
-        .setDescription('Skip to next song'),
+        .setDescription('Skip the current song'),
     
     new SlashCommandBuilder()
         .setName('queue')
-        .setDescription('Show current song queue'),
+        .setDescription('Show the current queue'),
     
     new SlashCommandBuilder()
-        .setName('clear')
-        .setDescription('Clear current queue'),
+        .setName('pause')
+        .setDescription('Pause the current song'),
+    
+    new SlashCommandBuilder()
+        .setName('resume')
+        .setDescription('Resume the paused song'),
     
     new SlashCommandBuilder()
         .setName('leave')
-        .setDescription('Stop playback and leave'),
+        .setDescription('Leave the voice channel'),
     
-    new SlashCommandBuilder()
-        .setName('playing')
-        .setDescription('Show current playing song'),
-    
-    new SlashCommandBuilder()
-        .setName('restart')
-        .setDescription('Restart current playing song'),
-
     // Coin economy commands
     new SlashCommandBuilder()
         .setName('flip')

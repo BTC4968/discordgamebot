@@ -1,12 +1,52 @@
-const { Client, GatewayIntentBits, Events, Collection, EmbedBuilder, SlashCommandBuilder, REST, Routes, ButtonBuilder, ActionRowBuilder, ButtonStyle } = require('discord.js');
-const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus } = require('@discordjs/voice');
-const play = require('play-dl');
+const { Client, GatewayIntentBits, Events, Collection, EmbedBuilder, SlashCommandBuilder, REST, Routes, ButtonBuilder, ActionRowBuilder, ButtonStyle, ChannelType } = require('discord.js');
+const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, VoiceConnectionStatus } = require('@discordjs/voice');
+const ytdl = require('@distube/ytdl-core');
+const { YouTube } = require('youtube-sr');
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 const config = require('./config.js');
+
+// Initialize spotify-url-info with a fetch function
+// Use Node.js built-in fetch if available (Node 18+), otherwise use axios as fallback
+let fetchFunction;
+if (typeof fetch !== 'undefined') {
+    fetchFunction = fetch;
+} else {
+    // Create a fetch-like wrapper using axios
+    fetchFunction = async (url, options = {}) => {
+        try {
+            const response = await axios({
+                url,
+                method: options.method || 'GET',
+                headers: options.headers || {},
+                data: options.body,
+                responseType: 'text',
+                validateStatus: () => true // Don't throw on any status
+            });
+            
+            return {
+                ok: response.status >= 200 && response.status < 300,
+                status: response.status,
+                statusText: response.statusText,
+                text: async () => response.data,
+                json: async () => {
+                    try {
+                        return JSON.parse(response.data);
+                    } catch (e) {
+                        return response.data;
+                    }
+                }
+            };
+        } catch (error) {
+            throw new Error(`Fetch error: ${error.message}`);
+        }
+    };
+}
+
+const { getData, getTracks } = require('spotify-url-info')(fetchFunction);
 
 // Create a new client instance
 const client = new Client({
@@ -22,11 +62,6 @@ const client = new Client({
 
 // Create a collection to store commands
 client.commands = new Collection();
-
-// Store voice connections and audio players per guild
-const voiceConnections = new Map();
-const audioPlayers = new Map();
-const musicQueues = new Map(); // Store music queues per guild: { songs: [], currentIndex: -1, isPlaying: false, isPaused: false }
 
 // Express server for Roblox webhooks
 const app = express();
@@ -68,6 +103,172 @@ const promotionDataFile = path.join(__dirname, 'data', 'promotionData.json');
 // VIP data
 const vipMembers = {};
 const vipDataFile = path.join(__dirname, 'data', 'vipData.json');
+
+// Music bot data - store for each guild (server)
+const guildMusicData = new Map();
+
+// Initialize guild music data
+function getGuildMusicData(guildId) {
+    if (!guildMusicData.has(guildId)) {
+        guildMusicData.set(guildId, {
+            queue: [],
+            isPlaying: false,
+            currentSong: null,
+            connection: null,
+            player: null,
+            textChannel: null,
+            controlMessage: null,
+            isPaused: false
+        });
+    }
+    return guildMusicData.get(guildId);
+}
+
+// Format duration from seconds to MM:SS or HH:MM:SS
+function formatDuration(seconds) {
+    if (!seconds || isNaN(seconds)) return 'Unknown';
+    
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = Math.floor(seconds % 60);
+    
+    if (hours > 0) {
+        return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    }
+    return `${minutes}:${secs.toString().padStart(2, '0')}`;
+}
+
+// Create embed with song info and control buttons
+function createNowPlayingEmbed(song, isPaused = false) {
+    const embed = new EmbedBuilder()
+        .setColor(0x5865F2)
+        .setTitle('🎵 Now Playing')
+        .setDescription(`**${song.title}**`)
+        .addFields(
+            { name: '⏱️ Duration', value: song.duration || 'Unknown', inline: true },
+            { name: '🔗 Link', value: `[Watch on YouTube](${song.url})`, inline: true }
+        )
+        .setTimestamp()
+        .setFooter({ text: isPaused ? '⏸️ Paused' : '▶️ Playing' });
+    
+    // Add thumbnail if available
+    if (song.thumbnail) {
+        embed.setThumbnail(song.thumbnail);
+    }
+    
+    const row = new ActionRowBuilder()
+        .addComponents(
+            new ButtonBuilder()
+                .setCustomId('music_pause')
+                .setLabel(isPaused ? 'Resume' : 'Pause')
+                .setStyle(isPaused ? ButtonStyle.Success : ButtonStyle.Primary)
+                .setEmoji(isPaused ? '▶️' : '⏸️'),
+            new ButtonBuilder()
+                .setCustomId('music_skip')
+                .setLabel('Skip')
+                .setStyle(ButtonStyle.Secondary)
+                .setEmoji('⏭️'),
+            new ButtonBuilder()
+                .setCustomId('music_stop')
+                .setLabel('Stop')
+                .setStyle(ButtonStyle.Danger)
+                .setEmoji('⏹️')
+        );
+    
+    return { embeds: [embed], components: [row] };
+}
+
+// Helper function to extract video ID from URL
+function extractVideoId(url) {
+    const patterns = [
+        /(?:youtube\.com\/watch\?v=|youtu\.be\/)([^&\n?#]+)/,
+        /youtube\.com\/embed\/([^&\n?#]+)/,
+        /youtube\.com\/v\/([^&\n?#]+)/
+    ];
+    
+    for (const pattern of patterns) {
+        const match = url.match(pattern);
+        if (match) {
+            return match[1];
+        }
+    }
+    
+    return null;
+}
+
+// Play next song in queue
+async function playNext(guildId) {
+    const data = getGuildMusicData(guildId);
+    
+    if (data.queue.length === 0) {
+        data.isPlaying = false;
+        data.currentSong = null;
+        data.isPaused = false;
+        // Delete control message if it exists
+        if (data.controlMessage) {
+            try {
+                await data.controlMessage.delete();
+            } catch (e) {
+                // Message might already be deleted
+            }
+            data.controlMessage = null;
+        }
+        if (data.textChannel) {
+            data.textChannel.send('🎵 Queue finished!');
+        }
+        return;
+    }
+    
+    const song = data.queue.shift();
+    data.currentSong = song;
+    data.isPlaying = true;
+    data.isPaused = false;
+    
+    try {
+        // Delete old control message if it exists
+        if (data.controlMessage) {
+            try {
+                await data.controlMessage.delete();
+            } catch (e) {
+                // Message might already be deleted
+            }
+        }
+        
+        // Send new now playing embed with controls
+        if (data.textChannel) {
+            const messageData = createNowPlayingEmbed(song, false);
+            const message = await data.textChannel.send(messageData);
+            data.controlMessage = message;
+        }
+        
+        // Get audio stream from YouTube
+        const stream = ytdl(song.url, {
+            filter: 'audioonly',
+            quality: 'highestaudio',
+            highWaterMark: 1 << 25
+        });
+        
+        const resource = createAudioResource(stream, {
+            inputType: 'unknown',
+            inlineVolume: true
+        });
+        
+        data.player.play(resource);
+        
+        // Handle when song ends
+        data.player.once(AudioPlayerStatus.Idle, () => {
+            playNext(guildId);
+        });
+        
+    } catch (error) {
+        console.error('Error playing song:', error);
+        if (data.textChannel) {
+            data.textChannel.send(`❌ Error playing **${song.title}**: ${error.message}`);
+        }
+        // Try next song
+        playNext(guildId);
+    }
+}
 
 // Apprentice requests
 const apprenticeRequests = {};
@@ -623,11 +824,6 @@ const commands = [
         .setName('raidpoints')
         .setDescription('Check your current raid points'),
     
-    // Leaders
-    // new SlashCommandBuilder()
-    //     .setName('leaders')
-    //     .setDescription('View current clan leaders'),
-    
     // Apprentice system
     new SlashCommandBuilder()
         .setName('apprenticerequest')
@@ -856,46 +1052,6 @@ const commands = [
     new SlashCommandBuilder()
         .setName('musichelp')
         .setDescription('Shows a list of music commands'),
-    
-    new SlashCommandBuilder()
-        .setName('play')
-        .setDescription('Play a song by URL')
-        .addStringOption(option =>
-            option.setName('link')
-                .setDescription('YouTube or Spotify link')
-                .setRequired(true)),
-    
-    new SlashCommandBuilder()
-        .setName('pause')
-        .setDescription('Pause current song'),
-    
-    new SlashCommandBuilder()
-        .setName('stop')
-        .setDescription('Stop current song'),
-    
-    new SlashCommandBuilder()
-        .setName('skip')
-        .setDescription('Skip to next song'),
-    
-    new SlashCommandBuilder()
-        .setName('queue')
-        .setDescription('Show current song queue'),
-    
-    new SlashCommandBuilder()
-        .setName('clear')
-        .setDescription('Clear current queue'),
-    
-    new SlashCommandBuilder()
-        .setName('leave')
-        .setDescription('Stop playback and leave'),
-    
-    new SlashCommandBuilder()
-        .setName('playing')
-        .setDescription('Show current playing song'),
-    
-    new SlashCommandBuilder()
-        .setName('restart')
-        .setDescription('Restart current playing song'),
 
     // Coin economy commands
     new SlashCommandBuilder()
@@ -942,7 +1098,40 @@ const commands = [
 
     new SlashCommandBuilder()
         .setName('cancelgrannybomb')
-        .setDescription('Cancel an active granny bomb (Granny only)')
+        .setDescription('Cancel an active granny bomb (Granny only)'),
+
+    // Music commands
+    new SlashCommandBuilder()
+        .setName('play')
+        .setDescription('Play a song from YouTube or Spotify')
+        .addStringOption(option =>
+            option.setName('url')
+                .setDescription('Song name, YouTube URL, or Spotify link')
+                .setRequired(true)),
+    
+    new SlashCommandBuilder()
+        .setName('stop')
+        .setDescription('Stop the music and clear the queue'),
+    
+    new SlashCommandBuilder()
+        .setName('skip')
+        .setDescription('Skip the current song'),
+    
+    new SlashCommandBuilder()
+        .setName('queue')
+        .setDescription('Show the current queue'),
+    
+    new SlashCommandBuilder()
+        .setName('pause')
+        .setDescription('Pause the current song'),
+    
+    new SlashCommandBuilder()
+        .setName('resume')
+        .setDescription('Resume the paused song'),
+    
+    new SlashCommandBuilder()
+        .setName('leave')
+        .setDescription('Make the bot leave the voice channel')
 ];
 
 // Register slash commands
@@ -1029,6 +1218,23 @@ function getUserCurrentRole(points) {
         }
     }
     return 'Disciple'; // Default role
+}
+
+// Function to get user's actual Discord role (checks what roles they have assigned)
+function getUserActualDiscordRole(member) {
+    if (!member) return null;
+    
+    // Get all roles from roleConfig in order (highest to lowest)
+    const roles = Object.entries(roleConfig).sort((a, b) => b[1].points - a[1].points);
+    
+    // Check if member has any of these roles
+    for (const [roleName, config] of roles) {
+        if (member.roles.cache.some(role => role.name === roleName)) {
+            return roleName;
+        }
+    }
+    
+    return null; // No role from roleConfig found
 }
 
 // Function to get next role and required points
@@ -1119,62 +1325,6 @@ client.once(Events.ClientReady, readyClient => {
     console.log(`Ready! Logged in as ${readyClient.user.tag}`);
 });
 
-// Music helper functions
-function getQueue(guildId) {
-    if (!musicQueues.has(guildId)) {
-        musicQueues.set(guildId, { songs: [], currentIndex: -1, isPlaying: false, isPaused: false });
-    }
-    return musicQueues.get(guildId);
-}
-
-async function playNextSong(guildId) {
-    const queue = getQueue(guildId);
-    const connection = voiceConnections.get(guildId);
-    const player = audioPlayers.get(guildId);
-    
-    if (!connection || !player) {
-        queue.isPlaying = false;
-        queue.currentIndex = -1;
-        return;
-    }
-    
-    if (queue.currentIndex >= queue.songs.length - 1) {
-        // No more songs in queue
-        queue.isPlaying = false;
-        queue.currentIndex = -1;
-        return;
-    }
-
-    queue.currentIndex++;
-    const song = queue.songs[queue.currentIndex];
-
-    try {
-        const stream = await play.stream(song.url);
-        const resource = createAudioResource(stream.stream, {
-            inputType: stream.type,
-        });
-
-        player.play(resource);
-        queue.isPlaying = true;
-        queue.isPaused = false;
-    } catch (error) {
-        console.error('Error playing next song:', error);
-        // Skip to next song on error
-        playNextSong(guildId);
-    }
-}
-
-async function addSongToQueue(guildId, songInfo, url) {
-    const queue = getQueue(guildId);
-    queue.songs.push({
-        title: songInfo.title || 'Unknown',
-        duration: songInfo.durationRaw || 'Unknown',
-        channel: songInfo.channel?.name || 'Unknown',
-        thumbnail: songInfo.thumbnails?.[0]?.url || null,
-        url: url
-    });
-}
-
 // Handle slash command interactions
 client.on(Events.InteractionCreate, async interaction => {
     if (!interaction.isChatInputCommand()) return;
@@ -1201,7 +1351,7 @@ client.on(Events.InteractionCreate, async interaction => {
                     { name: '🤝 Alliance System', value: '/setalliance\n/alliances\n/deletealliance', inline: true },
                     { name: '📊 Polls & Giveaways', value: '/pollcreate\n/giveaway', inline: true },
                     // { name: '👑 Leadership', value: '/leaders', inline: true },
-                    { name: '🎵 Music', value: '/musichelp\n/play\n/pause\n/stop\n/skip\n/queue\n/clear\n/leave\n/playing\n/restart', inline: true },
+                    { name: '🎵 Music', value: '/play\n/pause\n/resume\n/stop\n/skip\n/queue\n/leave', inline: true },
                     { name: '💰 Coin Economy', value: '/flip\n/rob\n/giftcoins', inline: true },
                     { name: '🛠️ Admin Commands', value: '/assigndivision\n/assignrole\n/promote\n/deleteall\n/deletelast10\n/ban\n/kick', inline: true },
                     { name: '📋 Mission System', value: '/sendmission\n/cancelmission', inline: true }
@@ -1237,8 +1387,22 @@ client.on(Events.InteractionCreate, async interaction => {
             const userPointsAmount = userPoints[userId] || 0;
             const userRaidPoints = raidPoints[userId] || 0;
             const userCoins = coins[userId] || 0;
-            const currentRole = getUserCurrentRole(userPointsAmount);
-            const nextRole = getNextRole(userPointsAmount);
+            
+            // Get member to check actual Discord roles
+            const member = await interaction.guild.members.fetch(userId).catch(() => null);
+            
+            // Check actual Discord role first, then fall back to points-based role
+            const actualDiscordRole = getUserActualDiscordRole(member);
+            const pointsBasedRole = getUserCurrentRole(userPointsAmount);
+            
+            // Use actual Discord role if available, otherwise use points-based role
+            const currentRole = actualDiscordRole || pointsBasedRole;
+            
+            // For next role calculation, use the actual role if it exists, otherwise use points
+            const roleForNextCalc = actualDiscordRole ? 
+                (roleConfig[actualDiscordRole] ? roleConfig[actualDiscordRole].points : userPointsAmount) : 
+                userPointsAmount;
+            const nextRole = getNextRole(roleForNextCalc);
 
             const pointsEmbed = new EmbedBuilder()
                 .setColor(0xFFD700)
@@ -2210,25 +2374,6 @@ client.on(Events.InteractionCreate, async interaction => {
 
             await interaction.reply({ embeds: [raidPointsEmbed] });
         }
-
-        // Leaders
-        // else if (commandName === 'leaders') {
-        //     const leadersEmbed = new EmbedBuilder()
-        //         .setColor(0x9932CC)
-        //         .setTitle('👑 Clan Leaders')
-        //         .setDescription('Current leadership structure')
-        //         .setTimestamp()
-        //         .setFooter({ text: 'ShadowBot' });
-
-        //     // This would be populated with actual leader data
-        //     leadersEmbed.addFields(
-        //         { name: 'Grandmaster', value: 'To be assigned', inline: true },
-        //         // { name: 'Elders', value: 'To be assigned', inline: true },
-        //         // { name: 'Masters', value: 'To be assigned', inline: true }
-        //     );
-
-        //     await interaction.reply({ embeds: [leadersEmbed] });
-        // }
 
         // Apprentice system
         else if (commandName === 'apprenticerequest') {
@@ -3774,469 +3919,320 @@ client.on(Events.InteractionCreate, async interaction => {
         }
 
         // Music command handlers
+        else if (commandName === 'play') {
+            const { guild, member, channel } = interaction;
+            const guildId = guild.id;
+            const data = getGuildMusicData(guildId);
+            data.textChannel = channel;
+            
+            // Check if user is in a voice channel
+            const voiceChannel = member.voice.channel;
+            if (!voiceChannel) {
+                await interaction.reply('❌ You need to be in a voice channel to use this command!');
+                return;
+            }
+            
+            await interaction.deferReply();
+            
+            const query = interaction.options.getString('url') || interaction.options.getString('query');
+            
+            // Join voice channel if not already connected
+            if (!data.connection || data.connection.state.status === VoiceConnectionStatus.Disconnected) {
+                if (voiceChannel) {
+                    const connection = joinVoiceChannel({
+                        channelId: voiceChannel.id,
+                        guildId: guildId,
+                        adapterCreator: guild.voiceAdapterCreator
+                    });
+                    
+                    const player = createAudioPlayer();
+                    connection.subscribe(player);
+                    
+                    data.connection = connection;
+                    data.player = player;
+                    
+                    // Handle connection events
+                    connection.on(VoiceConnectionStatus.Disconnected, () => {
+                        data.connection = null;
+                        data.player = null;
+                        data.isPlaying = false;
+                        data.queue = [];
+                    });
+                }
+            }
+            
+            // Search for song
+            let video;
+            let songUrl;
+            
+
+            if (!query) {
+                await interaction.editReply('❌ Please enter a song name, YouTube URL, or Spotify link!');
+                return;
+            }
+
+            // Check if it's a Spotify URL
+            if (query.includes('open.spotify.com') || query.includes('spotify.com/track')) {
+                try {
+                    // Get Spotify track data with artist information
+                    const tracks = await getTracks(query);
+                    
+                    if (!tracks || tracks.length === 0 || !tracks[0] || !tracks[0].name) {
+                        await interaction.editReply('❌ Could not fetch Spotify track information!');
+                        return;
+                    }
+                    
+                    const track = tracks[0];
+                    
+                    // Search YouTube for the track using artist and title
+                    const searchQuery = `${track.artist || ''} ${track.name}`.trim();
+                    const results = await YouTube.search(searchQuery, { limit: 1 });
+                    
+                    if (results.length === 0) {
+                        await interaction.editReply(`❌ Could not find "${track.name}" by ${track.artist || 'Unknown Artist'} on YouTube!`);
+                        return;
+                    }
+                    
+                    video = results[0];
+                    songUrl = `https://www.youtube.com/watch?v=${video.id}`;
+                    
+                    // Get cover art from Spotify data if available
+                    try {
+                        const spotifyData = await getData(query);
+                        if (spotifyData?.coverArt?.sources?.[0]?.url) {
+                            video.thumbnail = spotifyData.coverArt.sources[0].url;
+                        }
+                    } catch (e) {
+                        // Ignore errors getting cover art
+                    }
+                } catch (error) {
+                    console.error('Error fetching Spotify data:', error);
+                    await interaction.editReply('❌ Error fetching Spotify track. Please try searching by song name instead!');
+                    return;
+                }
+            } else if (query.includes('youtube.com') || query.includes('youtu.be')) {
+                // Direct YouTube URL
+                const videoId = extractVideoId(query);
+                if (videoId) {
+                    video = await YouTube.getVideo(`https://www.youtube.com/watch?v=${videoId}`);
+                    songUrl = `https://www.youtube.com/watch?v=${videoId}`;
+                } else {
+                    await interaction.editReply('❌ Invalid YouTube URL!');
+                    return;
+                }
+            } else {
+                // Search by name
+                const results = await YouTube.search(query, { limit: 1 });
+                if (results.length === 0) {
+                    await interaction.editReply('❌ No results found!');
+                    return;
+                }
+                video = results[0];
+                songUrl = `https://www.youtube.com/watch?v=${video.id}`;
+            }
+            
+            // Get duration in seconds and format it
+            const durationSeconds = video.duration ? video.duration / 1000 : null;
+            const durationFormatted = durationSeconds ? formatDuration(durationSeconds) : (video.durationFormatted || 'Unknown');
+            
+            // Get thumbnail - try multiple sources
+            let thumbnail = null;
+            if (video.thumbnail) {
+                thumbnail = typeof video.thumbnail === 'string' ? video.thumbnail : video.thumbnail.url;
+            } else if (video.id) {
+                // Fallback: construct thumbnail URL from video ID
+                thumbnail = `https://img.youtube.com/vi/${video.id}/maxresdefault.jpg`;
+            }
+            
+            const song = {
+                title: video.title,
+                url: songUrl,
+                duration: durationFormatted,
+                thumbnail: thumbnail
+            };
+            
+            // Add to queue
+            data.queue.push(song);
+            
+            if (data.isPlaying) {
+                await interaction.editReply(`✅ Added to queue: **${song.title}** (Duration: ${durationFormatted}, Position: ${data.queue.length})`);
+            } else {
+                await interaction.editReply(`✅ Starting playback...`);
+                playNext(guildId);
+            }
+        }
+        
+        else if (commandName === 'stop') {
+            const { guild } = interaction;
+            const guildId = guild.id;
+            const data = getGuildMusicData(guildId);
+            
+            if (!data.isPlaying && data.queue.length === 0) {
+                await interaction.reply('❌ Nothing is playing!');
+                return;
+            }
+            
+            data.queue = [];
+            if (data.player) {
+                data.player.stop();
+            }
+            data.isPlaying = false;
+            data.currentSong = null;
+            data.isPaused = false;
+            
+            // Delete control message
+            if (data.controlMessage) {
+                try {
+                    await data.controlMessage.delete();
+                } catch (e) {
+                    // Message might already be deleted
+                }
+                data.controlMessage = null;
+            }
+            
+            await interaction.reply('🛑 Stopped the music and cleared the queue!');
+        }
+        
+        else if (commandName === 'skip') {
+            const { guild } = interaction;
+            const guildId = guild.id;
+            const data = getGuildMusicData(guildId);
+            
+            if (!data.isPlaying) {
+                await interaction.reply('❌ Nothing is playing!');
+                return;
+            }
+            
+            if (data.player) {
+                data.player.stop();
+            }
+            
+            await interaction.reply('⏭️ Skipped the current song!');
+        }
+        
+        else if (commandName === 'queue') {
+            const { guild } = interaction;
+            const guildId = guild.id;
+            const data = getGuildMusicData(guildId);
+            
+            if (data.queue.length === 0 && !data.currentSong) {
+                await interaction.reply('📭 The queue is empty!');
+                return;
+            }
+            
+            let queueText = '';
+            if (data.currentSong) {
+                queueText += `🎵 **Now Playing:** ${data.currentSong.title}\n\n`;
+            }
+            
+            if (data.queue.length > 0) {
+                queueText += '📋 **Queue:**\n';
+                data.queue.forEach((song, index) => {
+                    queueText += `${index + 1}. ${song.title}\n`;
+                });
+            } else {
+                queueText += '📭 Queue is empty';
+            }
+            
+            await interaction.reply(queueText);
+        }
+        
+        else if (commandName === 'pause') {
+            const { guild } = interaction;
+            const guildId = guild.id;
+            const data = getGuildMusicData(guildId);
+            
+            if (!data.isPlaying) {
+                await interaction.reply('❌ Nothing is playing!');
+                return;
+            }
+            
+            if (data.player && data.player.state.status === AudioPlayerStatus.Playing) {
+                data.player.pause();
+                data.isPaused = true;
+                
+                // Update control message
+                if (data.controlMessage && data.currentSong) {
+                    try {
+                        const messageData = createNowPlayingEmbed(data.currentSong, true);
+                        await data.controlMessage.edit(messageData);
+                    } catch (e) {
+                        console.error('Error updating control message:', e);
+                    }
+                }
+                
+                await interaction.reply('⏸️ Paused!');
+            } else {
+                await interaction.reply('❌ Music is already paused!');
+            }
+        }
+        
+        else if (commandName === 'resume') {
+            const { guild } = interaction;
+            const guildId = guild.id;
+            const data = getGuildMusicData(guildId);
+            
+            if (!data.isPlaying) {
+                await interaction.reply('❌ Nothing is playing!');
+                return;
+            }
+            
+            if (data.player && data.player.state.status === AudioPlayerStatus.Paused) {
+                data.player.unpause();
+                data.isPaused = false;
+                
+                // Update control message
+                if (data.controlMessage && data.currentSong) {
+                    try {
+                        const messageData = createNowPlayingEmbed(data.currentSong, false);
+                        await data.controlMessage.edit(messageData);
+                    } catch (e) {
+                        console.error('Error updating control message:', e);
+                    }
+                }
+                
+                await interaction.reply('▶️ Resumed!');
+            } else {
+                await interaction.reply('❌ Music is not paused!');
+            }
+        }
+        
+        else if (commandName === 'leave') {
+            const { guild } = interaction;
+            const guildId = guild.id;
+            const data = getGuildMusicData(guildId);
+            
+            if (data.connection) {
+                data.connection.destroy();
+                data.connection = null;
+                data.player = null;
+                data.isPlaying = false;
+                data.queue = [];
+                data.currentSong = null;
+                await interaction.reply('👋 Left the voice channel!');
+            } else {
+                await interaction.reply('❌ I\'m not in a voice channel!');
+            }
+        }
+        
         else if (commandName === 'musichelp') {
             const helpEmbed = new EmbedBuilder()
                 .setColor(0x1DB954)
                 .setTitle('🎵 Music Commands')
                 .setDescription('Here are all available music commands:')
                 .addFields(
-                    { name: '/musichelp', value: 'Shows this list of music commands', inline: false },
-                    { name: '/play', value: 'Play a song by URL (YouTube or Spotify)', inline: false },
+                    { name: '/play <query>', value: 'Play a song by name, YouTube URL, or Spotify link', inline: false },
                     { name: '/pause', value: 'Pause the current song', inline: false },
-                    { name: '/stop', value: 'Stop the current song', inline: false },
+                    { name: '/resume', value: 'Resume the paused song', inline: false },
+                    { name: '/stop', value: 'Stop the music and clear the queue', inline: false },
                     { name: '/skip', value: 'Skip to the next song in queue', inline: false },
                     { name: '/queue', value: 'Show the current song queue', inline: false },
-                    { name: '/clear', value: 'Clear the current queue', inline: false },
-                    { name: '/leave', value: 'Stop playback and leave the voice channel', inline: false },
-                    { name: '/playing', value: 'Show the currently playing song', inline: false },
-                    { name: '/restart', value: 'Restart the current playing song', inline: false }
+                    { name: '/leave', value: 'Stop playback and leave the voice channel', inline: false }
                 )
                 .setTimestamp()
                 .setFooter({ text: 'ShadowBot Music' });
 
             await interaction.reply({ embeds: [helpEmbed] });
-        }
-
-        else if (commandName === 'play') {
-            try {
-                const link = interaction.options.getString('link');
-                const member = interaction.member;
-                const voiceChannel = member.voice.channel;
-
-                // Check if user is in a voice channel
-                if (!voiceChannel) {
-                    await interaction.reply({ content: '❌ You need to be in a voice channel to play music!', ephemeral: true });
-                    return;
-                }
-
-                // Check if bot has permission to join and speak
-                if (!voiceChannel.joinable) {
-                    await interaction.reply({ content: '❌ I don\'t have permission to join this voice channel!', ephemeral: true });
-                    return;
-                }
-
-                await interaction.deferReply();
-
-                let songInfo;
-                let finalUrl = link;
-
-                try {
-                    // Validate the link
-                    const linkType = await play.validate(link);
-                    
-                    // Check for playlists and albums FIRST (before checking videos/tracks)
-                    // YouTube playlist check: must be /playlist in URL path, not just "playlist" in query params
-                    const isYoutubePlaylist = linkType === 'yt_playlist' || 
-                                             (link.includes('youtube.com') && link.includes('/playlist'));
-                    
-                    // Spotify playlist/album check
-                    const isSpotifyPlaylistOrAlbum = linkType === 'sp_playlist' || linkType === 'sp_album' || 
-                                                     (link.includes('spotify.com') && (link.includes('/playlist') || link.includes('/album')));
-                    
-                    if (isYoutubePlaylist) {
-                        await interaction.editReply({ content: '❌ Playlists are not supported yet. Please use a single video link.' });
-                        return;
-                    }
-                    
-                    if (isSpotifyPlaylistOrAlbum || linkType === 'playlist' || linkType === 'album') {
-                        await interaction.editReply({ content: '❌ Playlists and albums are not supported yet. Please use a single track link.' });
-                        return;
-                    }
-                    
-                    // Handle YouTube video links (single videos only, playlists already filtered out)
-                    if (linkType === 'yt_video' || linkType === 'video' || link.includes('youtube.com') || link.includes('youtu.be')) {
-                        const info = await play.video_info(link);
-                        songInfo = info.video_details;
-                        finalUrl = link;
-                    } 
-                    // Handle Spotify track links
-                    else if (linkType === 'sp_track' || linkType === 'track' || (link.includes('spotify.com') && link.includes('/track'))) {
-                        // Spotify track - get track info and search YouTube
-                        const spotifyInfo = await play.spotify(link);
-                        const searchQuery = `${spotifyInfo.name} ${spotifyInfo.artists[0]?.name || ''}`;
-                        const ytSearch = await play.search(searchQuery, { limit: 1 });
-                        
-                        if (ytSearch.length === 0) {
-                            await interaction.editReply({ content: '❌ Could not find this song on YouTube. Please try a YouTube link instead.' });
-                            return;
-                        }
-
-                        const ytUrl = ytSearch[0].url;
-                        const info = await play.video_info(ytUrl);
-                        songInfo = info.video_details;
-                        finalUrl = ytUrl;
-                    } 
-                    // Try to treat as YouTube search query if it's not a valid link
-                    else if (!link.includes('http') && !link.includes('://')) {
-                        // Treat as search query
-                        const ytSearch = await play.search(link, { limit: 1 });
-                        
-                        if (ytSearch.length === 0) {
-                            await interaction.editReply({ content: '❌ Could not find any results. Please provide a valid YouTube or Spotify link.' });
-                            return;
-                        }
-
-                        const ytUrl = ytSearch[0].url;
-                        const info = await play.video_info(ytUrl);
-                        songInfo = info.video_details;
-                        finalUrl = ytUrl;
-                    } 
-                    else {
-                        await interaction.editReply({ content: '❌ Invalid link! Please provide a valid YouTube or Spotify link.' });
-                        return;
-                    }
-                } catch (error) {
-                    console.error('Error processing music link:', error);
-                    await interaction.editReply({ content: `❌ Error processing the link: ${error.message}. Please make sure it's a valid YouTube or Spotify link.` });
-                    return;
-                }
-
-                // Join or get existing voice connection
-                let connection = voiceConnections.get(interaction.guild.id);
-                
-                if (!connection || connection.state.status === 'disconnected') {
-                    connection = joinVoiceChannel({
-                        channelId: voiceChannel.id,
-                        guildId: interaction.guild.id,
-                        adapterCreator: interaction.guild.voiceAdapterCreator,
-                    });
-                    voiceConnections.set(interaction.guild.id, connection);
-                } else if (connection.joinConfig.channelId !== voiceChannel.id) {
-                    // User is in a different channel, move the bot
-                    connection.destroy();
-                    connection = joinVoiceChannel({
-                        channelId: voiceChannel.id,
-                        guildId: interaction.guild.id,
-                        adapterCreator: interaction.guild.voiceAdapterCreator,
-                    });
-                    voiceConnections.set(interaction.guild.id, connection);
-                }
-
-                // Create or get audio player
-                let player = audioPlayers.get(interaction.guild.id);
-                if (!player) {
-                    player = createAudioPlayer();
-                    audioPlayers.set(interaction.guild.id, player);
-                    
-                    // Handle player events (only set up once per player)
-                    if (!player.listeners(AudioPlayerStatus.Idle).length) {
-                        player.on(AudioPlayerStatus.Idle, () => {
-                            const queue = getQueue(interaction.guild.id);
-                            if (queue.isPlaying && !queue.isPaused) {
-                                playNextSong(interaction.guild.id);
-                            } else {
-                                // Auto-disconnect after 5 minutes of inactivity
-                                setTimeout(() => {
-                                    const playerCheck = audioPlayers.get(interaction.guild.id);
-                                    if (playerCheck && playerCheck.state.status === AudioPlayerStatus.Idle) {
-                                        const connectionCheck = voiceConnections.get(interaction.guild.id);
-                                        if (connectionCheck) {
-                                            connectionCheck.destroy();
-                                        }
-                                        voiceConnections.delete(interaction.guild.id);
-                                        audioPlayers.delete(interaction.guild.id);
-                                        musicQueues.delete(interaction.guild.id);
-                                    }
-                                }, 300000); // 5 minutes
-                            }
-                        });
-                    }
-                }
-                
-                // Ensure connection is subscribed to player
-                try {
-                    connection.subscribe(player);
-                } catch (error) {
-                    // If subscription fails, try again after a short delay
-                    setTimeout(() => {
-                        try {
-                            connection.subscribe(player);
-                        } catch (e) {
-                            console.error('Error subscribing player:', e);
-                        }
-                    }, 100);
-                }
-
-                // Add song to queue
-                await addSongToQueue(interaction.guild.id, songInfo, finalUrl);
-                const queue = getQueue(interaction.guild.id);
-
-                // If nothing is playing, start playing
-                if (!queue.isPlaying || queue.currentIndex === -1) {
-                    queue.currentIndex = queue.songs.length - 1;
-                    const stream = await play.stream(finalUrl);
-                    const resource = createAudioResource(stream.stream, {
-                        inputType: stream.type,
-                    });
-                    player.play(resource);
-                    queue.isPlaying = true;
-                    queue.isPaused = false;
-
-                    const songEmbed = new EmbedBuilder()
-                        .setColor(0x1DB954)
-                        .setTitle('🎵 Now Playing')
-                        .setDescription(`**${songInfo.title || 'Unknown'}**`)
-                        .addFields(
-                            { name: 'Duration', value: songInfo.durationRaw || 'Unknown', inline: true },
-                            { name: 'Channel', value: songInfo.channel?.name || 'Unknown', inline: true },
-                            { name: 'Voice Channel', value: voiceChannel.name, inline: true }
-                        )
-                        .setThumbnail(songInfo.thumbnails?.[0]?.url || null)
-                        .setTimestamp()
-                        .setFooter({ text: 'ShadowBot Music' });
-
-                    await interaction.editReply({ embeds: [songEmbed] });
-                } else {
-                    // Song added to queue
-                    const queueEmbed = new EmbedBuilder()
-                        .setColor(0x1DB954)
-                        .setTitle('✅ Added to Queue')
-                        .setDescription(`**${songInfo.title || 'Unknown'}**`)
-                        .addFields(
-                            { name: 'Position', value: `${queue.songs.length}`, inline: true },
-                            { name: 'Duration', value: songInfo.durationRaw || 'Unknown', inline: true },
-                            { name: 'Channel', value: songInfo.channel?.name || 'Unknown', inline: true }
-                        )
-                        .setThumbnail(songInfo.thumbnails?.[0]?.url || null)
-                        .setTimestamp()
-                        .setFooter({ text: 'ShadowBot Music' });
-
-                    await interaction.editReply({ embeds: [queueEmbed] });
-                }
-
-            } catch (error) {
-                console.error('Error playing music:', error);
-                await interaction.editReply({ content: '❌ An error occurred while playing music. Please try again.' });
-            }
-        }
-
-        else if (commandName === 'pause') {
-            try {
-                const player = audioPlayers.get(interaction.guild.id);
-                const queue = getQueue(interaction.guild.id);
-
-                if (!player || !queue.isPlaying) {
-                    await interaction.reply({ content: '❌ Nothing is currently playing!', ephemeral: true });
-                    return;
-                }
-
-                if (queue.isPaused) {
-                    // Resume if paused
-                    player.unpause();
-                    queue.isPaused = false;
-                    await interaction.reply({ content: '▶️ Music resumed!' });
-                } else {
-                    // Pause if playing
-                    player.pause();
-                    queue.isPaused = true;
-                    await interaction.reply({ content: '⏸️ Music paused!' });
-                }
-            } catch (error) {
-                console.error('Error pausing/resuming music:', error);
-                await interaction.reply({ content: '❌ An error occurred while pausing/resuming music.', ephemeral: true });
-            }
-        }
-
-        else if (commandName === 'stop') {
-            try {
-                const player = audioPlayers.get(interaction.guild.id);
-                const queue = getQueue(interaction.guild.id);
-
-                if (!player || !queue.isPlaying) {
-                    await interaction.reply({ content: '❌ Nothing is currently playing!', ephemeral: true });
-                    return;
-                }
-
-                player.stop();
-                queue.isPlaying = false;
-                queue.isPaused = false;
-
-                await interaction.reply({ content: '⏹️ Music stopped!' });
-            } catch (error) {
-                console.error('Error stopping music:', error);
-                await interaction.reply({ content: '❌ An error occurred while stopping music.', ephemeral: true });
-            }
-        }
-
-        else if (commandName === 'skip') {
-            try {
-                const player = audioPlayers.get(interaction.guild.id);
-                const queue = getQueue(interaction.guild.id);
-                const connection = voiceConnections.get(interaction.guild.id);
-
-                if (!player || !queue.isPlaying) {
-                    await interaction.reply({ content: '❌ Nothing is currently playing!', ephemeral: true });
-                    return;
-                }
-
-                if (queue.currentIndex >= queue.songs.length - 1) {
-                    await interaction.reply({ content: '❌ No more songs in queue to skip to!', ephemeral: true });
-                    return;
-                }
-
-                player.stop(); // This will trigger the Idle event and play next song
-                await interaction.reply({ content: '⏭️ Skipped to next song!' });
-            } catch (error) {
-                console.error('Error skipping music:', error);
-                await interaction.reply({ content: '❌ An error occurred while skipping music.', ephemeral: true });
-            }
-        }
-
-        else if (commandName === 'queue') {
-            try {
-                const queue = getQueue(interaction.guild.id);
-
-                if (queue.songs.length === 0) {
-                    await interaction.reply({ content: '❌ The queue is empty!', ephemeral: true });
-                    return;
-                }
-
-                const queueList = queue.songs.map((song, index) => {
-                    const currentMarker = index === queue.currentIndex ? '▶️' : '';
-                    return `${index + 1}. ${currentMarker} **${song.title}** - ${song.duration}`;
-                }).join('\n');
-
-                const queueEmbed = new EmbedBuilder()
-                    .setColor(0x1DB954)
-                    .setTitle('📋 Music Queue')
-                    .setDescription(queueList.length > 4096 ? queueList.substring(0, 4093) + '...' : queueList)
-                    .addFields(
-                        { name: 'Total Songs', value: `${queue.songs.length}`, inline: true },
-                        { name: 'Currently Playing', value: queue.currentIndex >= 0 ? `${queue.currentIndex + 1}` : 'None', inline: true },
-                        { name: 'Status', value: queue.isPaused ? '⏸️ Paused' : queue.isPlaying ? '▶️ Playing' : '⏹️ Stopped', inline: true }
-                    )
-                    .setTimestamp()
-                    .setFooter({ text: 'ShadowBot Music' });
-
-                await interaction.reply({ embeds: [queueEmbed] });
-            } catch (error) {
-                console.error('Error showing queue:', error);
-                await interaction.reply({ content: '❌ An error occurred while showing the queue.', ephemeral: true });
-            }
-        }
-
-        else if (commandName === 'clear') {
-            try {
-                const queue = getQueue(interaction.guild.id);
-
-                if (queue.songs.length === 0) {
-                    await interaction.reply({ content: '❌ The queue is already empty!', ephemeral: true });
-                    return;
-                }
-
-                // Keep the currently playing song if there is one
-                if (queue.currentIndex >= 0 && queue.currentIndex < queue.songs.length) {
-                    const currentSong = queue.songs[queue.currentIndex];
-                    queue.songs = [currentSong];
-                    queue.currentIndex = 0;
-                } else {
-                    queue.songs = [];
-                    queue.currentIndex = -1;
-                }
-
-                await interaction.reply({ content: '🗑️ Queue cleared!' });
-            } catch (error) {
-                console.error('Error clearing queue:', error);
-                await interaction.reply({ content: '❌ An error occurred while clearing the queue.', ephemeral: true });
-            }
-        }
-
-        else if (commandName === 'leave') {
-            try {
-                const connection = voiceConnections.get(interaction.guild.id);
-                const player = audioPlayers.get(interaction.guild.id);
-
-                if (!connection) {
-                    await interaction.reply({ content: '❌ I\'m not in a voice channel!', ephemeral: true });
-                    return;
-                }
-
-                if (player) {
-                    player.stop();
-                }
-
-                connection.destroy();
-                voiceConnections.delete(interaction.guild.id);
-                audioPlayers.delete(interaction.guild.id);
-                musicQueues.delete(interaction.guild.id);
-
-                await interaction.reply({ content: '👋 Left the voice channel!' });
-            } catch (error) {
-                console.error('Error leaving voice channel:', error);
-                await interaction.reply({ content: '❌ An error occurred while leaving the voice channel.', ephemeral: true });
-            }
-        }
-
-        else if (commandName === 'playing') {
-            try {
-                const queue = getQueue(interaction.guild.id);
-
-                if (!queue.isPlaying || queue.currentIndex < 0 || queue.currentIndex >= queue.songs.length) {
-                    await interaction.reply({ content: '❌ Nothing is currently playing!', ephemeral: true });
-                    return;
-                }
-
-                const currentSong = queue.songs[queue.currentIndex];
-
-                const playingEmbed = new EmbedBuilder()
-                    .setColor(0x1DB954)
-                    .setTitle('🎵 Now Playing')
-                    .setDescription(`**${currentSong.title}**`)
-                    .addFields(
-                        { name: 'Duration', value: currentSong.duration, inline: true },
-                        { name: 'Channel', value: currentSong.channel, inline: true },
-                        { name: 'Status', value: queue.isPaused ? '⏸️ Paused' : '▶️ Playing', inline: true }
-                    )
-                    .setThumbnail(currentSong.thumbnail)
-                    .setTimestamp()
-                    .setFooter({ text: 'ShadowBot Music' });
-
-                await interaction.reply({ embeds: [playingEmbed] });
-            } catch (error) {
-                console.error('Error showing current song:', error);
-                await interaction.reply({ content: '❌ An error occurred while showing the current song.', ephemeral: true });
-            }
-        }
-
-        else if (commandName === 'restart') {
-            try {
-                const player = audioPlayers.get(interaction.guild.id);
-                const queue = getQueue(interaction.guild.id);
-                const connection = voiceConnections.get(interaction.guild.id);
-
-                if (!player || !queue.isPlaying || queue.currentIndex < 0 || queue.currentIndex >= queue.songs.length) {
-                    await interaction.reply({ content: '❌ Nothing is currently playing!', ephemeral: true });
-                    return;
-                }
-
-                const currentSong = queue.songs[queue.currentIndex];
-
-                // Restart the current song
-                const stream = await play.stream(currentSong.url);
-                const resource = createAudioResource(stream.stream, {
-                    inputType: stream.type,
-                });
-
-                player.play(resource);
-                queue.isPaused = false;
-
-                const restartEmbed = new EmbedBuilder()
-                    .setColor(0x1DB954)
-                    .setTitle('🔄 Restarted')
-                    .setDescription(`**${currentSong.title}**`)
-                    .addFields(
-                        { name: 'Duration', value: currentSong.duration, inline: true },
-                        { name: 'Channel', value: currentSong.channel, inline: true }
-                    )
-                    .setThumbnail(currentSong.thumbnail)
-                    .setTimestamp()
-                    .setFooter({ text: 'ShadowBot Music' });
-
-                await interaction.reply({ embeds: [restartEmbed] });
-            } catch (error) {
-                console.error('Error restarting song:', error);
-                await interaction.reply({ content: '❌ An error occurred while restarting the song.', ephemeral: true });
-            }
         }
 
     } catch (error) {
@@ -4255,9 +4251,93 @@ client.on(Events.InteractionCreate, async interaction => {
 client.on(Events.InteractionCreate, async interaction => {
     if (!interaction.isButton()) return;
 
-    const { customId } = interaction;
+    const { customId, guild, member } = interaction;
 
     try {
+        // Handle music control buttons
+        if (customId === 'music_pause' || customId === 'music_skip' || customId === 'music_stop') {
+            const guildId = guild.id;
+            const data = getGuildMusicData(guildId);
+            
+            // Check if user is in a voice channel
+            const voiceChannel = member.voice.channel;
+            if (!voiceChannel) {
+                await interaction.reply({ content: '❌ You need to be in a voice channel!', ephemeral: true });
+                return;
+            }
+            
+            switch (customId) {
+                case 'music_pause': {
+                    if (!data.isPlaying || !data.currentSong) {
+                        await interaction.reply({ content: '❌ Nothing is playing!', ephemeral: true });
+                        return;
+                    }
+                    
+                    if (data.player) {
+                        if (data.player.state.status === AudioPlayerStatus.Playing) {
+                            data.player.pause();
+                            data.isPaused = true;
+                            
+                            // Update the embed
+                            const messageData = createNowPlayingEmbed(data.currentSong, true);
+                            await interaction.update(messageData);
+                        } else if (data.player.state.status === AudioPlayerStatus.Paused) {
+                            data.player.unpause();
+                            data.isPaused = false;
+                            
+                            // Update the embed
+                            const messageData = createNowPlayingEmbed(data.currentSong, false);
+                            await interaction.update(messageData);
+                        }
+                    }
+                    break;
+                }
+                
+                case 'music_skip': {
+                    if (!data.isPlaying) {
+                        await interaction.reply({ content: '❌ Nothing is playing!', ephemeral: true });
+                        return;
+                    }
+                    
+                    if (data.player) {
+                        data.player.stop();
+                    }
+                    
+                    await interaction.reply({ content: '⏭️ Skipped!', ephemeral: true });
+                    break;
+                }
+                
+                case 'music_stop': {
+                    if (!data.isPlaying && data.queue.length === 0) {
+                        await interaction.reply({ content: '❌ Nothing is playing!', ephemeral: true });
+                        return;
+                    }
+                    
+                    data.queue = [];
+                    if (data.player) {
+                        data.player.stop();
+                    }
+                    data.isPlaying = false;
+                    data.currentSong = null;
+                    data.isPaused = false;
+                    
+                    // Delete control message
+                    if (data.controlMessage) {
+                        try {
+                            await data.controlMessage.delete();
+                        } catch (e) {
+                            // Message might already be deleted
+                        }
+                        data.controlMessage = null;
+                    }
+                    
+                    await interaction.reply({ content: '🛑 Stopped!', ephemeral: true });
+                    break;
+                }
+            }
+            return;
+        }
+        
         // Handle mission accept/decline buttons
         if (customId.startsWith('mission_accept_') || customId.startsWith('mission_decline_')) {
             const missionId = customId.split('_')[2];
