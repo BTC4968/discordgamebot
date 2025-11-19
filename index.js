@@ -1,6 +1,6 @@
 const { Client, GatewayIntentBits, Events, Collection, EmbedBuilder, SlashCommandBuilder, REST, Routes, ButtonBuilder, ActionRowBuilder, ButtonStyle, ChannelType } = require('discord.js');
 const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, VoiceConnectionStatus } = require('@discordjs/voice');
-const ytdl = require('@distube/ytdl-core');
+const play = require('play-dl');
 const { YouTube } = require('youtube-sr');
 const express = require('express');
 const cors = require('cors');
@@ -241,17 +241,26 @@ async function playNext(guildId) {
             data.controlMessage = message;
         }
         
-        // Get audio stream from YouTube
-        const stream = ytdl(song.url, {
-            filter: 'audioonly',
-            quality: 'highestaudio',
-            highWaterMark: 1 << 25
-        });
+        // Get audio stream from YouTube using play-dl
+        let stream;
+        try {
+            stream = await play.stream(song.url);
+        } catch (error) {
+            console.error('Error getting stream:', error);
+            throw new Error(`Failed to get audio stream: ${error.message}`);
+        }
         
-        const resource = createAudioResource(stream, {
-            inputType: 'unknown',
+        // Determine input type - play-dl returns 'opus' or 'arbitrary'
+        // For @discordjs/voice, we use 'opus' for opus streams, or omit for auto-detect
+        const resourceOptions = {
             inlineVolume: true
-        });
+        };
+        
+        if (stream.type === 'opus') {
+            resourceOptions.inputType = 'opus';
+        }
+        
+        const resource = createAudioResource(stream.stream, resourceOptions);
         
         data.player.play(resource);
         
