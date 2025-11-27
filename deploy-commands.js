@@ -367,43 +367,6 @@ const commands = [
                 .setDescription('Reason for the kick')
                 .setRequired(false)),
 
-    // Music commands
-    new SlashCommandBuilder()
-        .setName('musichelp')
-        .setDescription('Shows a list of music commands'),
-    
-    new SlashCommandBuilder()
-        .setName('play')
-        .setDescription('Play a song from YouTube or Spotify')
-        .addStringOption(option =>
-            option.setName('url')
-                .setDescription('Song name, YouTube URL, or Spotify link')
-                .setRequired(true)),
-    
-    new SlashCommandBuilder()
-        .setName('stop')
-        .setDescription('Stop the music and clear the queue'),
-    
-    new SlashCommandBuilder()
-        .setName('skip')
-        .setDescription('Skip the current song'),
-    
-    new SlashCommandBuilder()
-        .setName('queue')
-        .setDescription('Show the current queue'),
-    
-    new SlashCommandBuilder()
-        .setName('pause')
-        .setDescription('Pause the current song'),
-    
-    new SlashCommandBuilder()
-        .setName('resume')
-        .setDescription('Resume the paused song'),
-    
-    new SlashCommandBuilder()
-        .setName('leave')
-        .setDescription('Leave the voice channel'),
-    
     // Coin economy commands
     new SlashCommandBuilder()
         .setName('flip')
@@ -449,7 +412,30 @@ const commands = [
 
     new SlashCommandBuilder()
         .setName('cancelgrannybomb')
-        .setDescription('Cancel an active granny bomb (Granny only)')
+        .setDescription('Cancel an active granny bomb (Granny only)'),
+
+    new SlashCommandBuilder()
+        .setName('timeconvert')
+        .setDescription('Converts inputted time to multiple timezones')
+        .addStringOption(option =>
+            option.setName('time')
+                .setDescription('Time to convert (e.g., "2024-01-15 14:30" or "14:30" for today)')
+                .setRequired(true))
+        .addStringOption(option =>
+            option.setName('timezone')
+                .setDescription('Timezone of the input time (default: UTC)')
+                .setRequired(false)
+                .addChoices(
+                    { name: 'UTC', value: 'UTC' },
+                    { name: 'EST (Eastern)', value: 'America/New_York' },
+                    { name: 'PST (Pacific)', value: 'America/Los_Angeles' },
+                    { name: 'CST (Central)', value: 'America/Chicago' },
+                    { name: 'MST (Mountain)', value: 'America/Denver' },
+                    { name: 'GMT (London)', value: 'Europe/London' },
+                    { name: 'CET (Central European)', value: 'Europe/Paris' },
+                    { name: 'JST (Japan)', value: 'Asia/Tokyo' },
+                    { name: 'AEST (Australia East)', value: 'Australia/Sydney' }
+                ))
 ];
 
 // Register slash commands

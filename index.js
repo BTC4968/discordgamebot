@@ -1,52 +1,10 @@
 const { Client, GatewayIntentBits, Events, Collection, EmbedBuilder, SlashCommandBuilder, REST, Routes, ButtonBuilder, ActionRowBuilder, ButtonStyle, ChannelType } = require('discord.js');
-const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, VoiceConnectionStatus } = require('@discordjs/voice');
-const play = require('play-dl');
-const { YouTube } = require('youtube-sr');
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 const config = require('./config.js');
-
-// Initialize spotify-url-info with a fetch function
-// Use Node.js built-in fetch if available (Node 18+), otherwise use axios as fallback
-let fetchFunction;
-if (typeof fetch !== 'undefined') {
-    fetchFunction = fetch;
-} else {
-    // Create a fetch-like wrapper using axios
-    fetchFunction = async (url, options = {}) => {
-        try {
-            const response = await axios({
-                url,
-                method: options.method || 'GET',
-                headers: options.headers || {},
-                data: options.body,
-                responseType: 'text',
-                validateStatus: () => true // Don't throw on any status
-            });
-            
-            return {
-                ok: response.status >= 200 && response.status < 300,
-                status: response.status,
-                statusText: response.statusText,
-                text: async () => response.data,
-                json: async () => {
-                    try {
-                        return JSON.parse(response.data);
-                    } catch (e) {
-                        return response.data;
-                    }
-                }
-            };
-        } catch (error) {
-            throw new Error(`Fetch error: ${error.message}`);
-        }
-    };
-}
-
-const { getData, getTracks } = require('spotify-url-info')(fetchFunction);
 
 // Create a new client instance
 const client = new Client({
@@ -55,7 +13,6 @@ const client = new Client({
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
         GatewayIntentBits.GuildMessageReactions,
-        GatewayIntentBits.GuildVoiceStates,
         GatewayIntentBits.GuildMembers // Required to see all members in the server
     ]
 });
@@ -103,181 +60,6 @@ const promotionDataFile = path.join(__dirname, 'data', 'promotionData.json');
 // VIP data
 const vipMembers = {};
 const vipDataFile = path.join(__dirname, 'data', 'vipData.json');
-
-// Music bot data - store for each guild (server)
-const guildMusicData = new Map();
-
-// Initialize guild music data
-function getGuildMusicData(guildId) {
-    if (!guildMusicData.has(guildId)) {
-        guildMusicData.set(guildId, {
-            queue: [],
-            isPlaying: false,
-            currentSong: null,
-            connection: null,
-            player: null,
-            textChannel: null,
-            controlMessage: null,
-            isPaused: false
-        });
-    }
-    return guildMusicData.get(guildId);
-}
-
-// Format duration from seconds to MM:SS or HH:MM:SS
-function formatDuration(seconds) {
-    if (!seconds || isNaN(seconds)) return 'Unknown';
-    
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    const secs = Math.floor(seconds % 60);
-    
-    if (hours > 0) {
-        return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-    }
-    return `${minutes}:${secs.toString().padStart(2, '0')}`;
-}
-
-// Create embed with song info and control buttons
-function createNowPlayingEmbed(song, isPaused = false) {
-    const embed = new EmbedBuilder()
-        .setColor(0x5865F2)
-        .setTitle('🎵 Now Playing')
-        .setDescription(`**${song.title}**`)
-        .addFields(
-            { name: '⏱️ Duration', value: song.duration || 'Unknown', inline: true },
-            { name: '🔗 Link', value: `[Watch on YouTube](${song.url})`, inline: true }
-        )
-        .setTimestamp()
-        .setFooter({ text: isPaused ? '⏸️ Paused' : '▶️ Playing' });
-    
-    // Add thumbnail if available
-    if (song.thumbnail) {
-        embed.setThumbnail(song.thumbnail);
-    }
-    
-    const row = new ActionRowBuilder()
-        .addComponents(
-            new ButtonBuilder()
-                .setCustomId('music_pause')
-                .setLabel(isPaused ? 'Resume' : 'Pause')
-                .setStyle(isPaused ? ButtonStyle.Success : ButtonStyle.Primary)
-                .setEmoji(isPaused ? '▶️' : '⏸️'),
-            new ButtonBuilder()
-                .setCustomId('music_skip')
-                .setLabel('Skip')
-                .setStyle(ButtonStyle.Secondary)
-                .setEmoji('⏭️'),
-            new ButtonBuilder()
-                .setCustomId('music_stop')
-                .setLabel('Stop')
-                .setStyle(ButtonStyle.Danger)
-                .setEmoji('⏹️')
-        );
-    
-    return { embeds: [embed], components: [row] };
-}
-
-// Helper function to extract video ID from URL
-function extractVideoId(url) {
-    const patterns = [
-        /(?:youtube\.com\/watch\?v=|youtu\.be\/)([^&\n?#]+)/,
-        /youtube\.com\/embed\/([^&\n?#]+)/,
-        /youtube\.com\/v\/([^&\n?#]+)/
-    ];
-    
-    for (const pattern of patterns) {
-        const match = url.match(pattern);
-        if (match) {
-            return match[1];
-        }
-    }
-    
-    return null;
-}
-
-// Play next song in queue
-async function playNext(guildId) {
-    const data = getGuildMusicData(guildId);
-    
-    if (data.queue.length === 0) {
-        data.isPlaying = false;
-        data.currentSong = null;
-        data.isPaused = false;
-        // Delete control message if it exists
-        if (data.controlMessage) {
-            try {
-                await data.controlMessage.delete();
-            } catch (e) {
-                // Message might already be deleted
-            }
-            data.controlMessage = null;
-        }
-        if (data.textChannel) {
-            data.textChannel.send('🎵 Queue finished!');
-        }
-        return;
-    }
-    
-    const song = data.queue.shift();
-    data.currentSong = song;
-    data.isPlaying = true;
-    data.isPaused = false;
-    
-    try {
-        // Delete old control message if it exists
-        if (data.controlMessage) {
-            try {
-                await data.controlMessage.delete();
-            } catch (e) {
-                // Message might already be deleted
-            }
-        }
-        
-        // Send new now playing embed with controls
-        if (data.textChannel) {
-            const messageData = createNowPlayingEmbed(song, false);
-            const message = await data.textChannel.send(messageData);
-            data.controlMessage = message;
-        }
-        
-        // Get audio stream from YouTube using play-dl
-        let stream;
-        try {
-            stream = await play.stream(song.url);
-        } catch (error) {
-            console.error('Error getting stream:', error);
-            throw new Error(`Failed to get audio stream: ${error.message}`);
-        }
-        
-        // Determine input type - play-dl returns 'opus' or 'arbitrary'
-        // For @discordjs/voice, we use 'opus' for opus streams, or omit for auto-detect
-        const resourceOptions = {
-            inlineVolume: true
-        };
-        
-        if (stream.type === 'opus') {
-            resourceOptions.inputType = 'opus';
-        }
-        
-        const resource = createAudioResource(stream.stream, resourceOptions);
-        
-        data.player.play(resource);
-        
-        // Handle when song ends
-        data.player.once(AudioPlayerStatus.Idle, () => {
-            playNext(guildId);
-        });
-        
-    } catch (error) {
-        console.error('Error playing song:', error);
-        if (data.textChannel) {
-            data.textChannel.send(`❌ Error playing **${song.title}**: ${error.message}`);
-        }
-        // Try next song
-        playNext(guildId);
-    }
-}
 
 // Apprentice requests
 const apprenticeRequests = {};
@@ -1056,12 +838,6 @@ const commands = [
             option.setName('reason')
                 .setDescription('Reason for the kick')
                 .setRequired(false)),
-
-    // Music commands
-    new SlashCommandBuilder()
-        .setName('musichelp')
-        .setDescription('Shows a list of music commands'),
-
     // Coin economy commands
     new SlashCommandBuilder()
         .setName('flip')
@@ -1109,38 +885,28 @@ const commands = [
         .setName('cancelgrannybomb')
         .setDescription('Cancel an active granny bomb (Granny only)'),
 
-    // Music commands
     new SlashCommandBuilder()
-        .setName('play')
-        .setDescription('Play a song from YouTube or Spotify')
+        .setName('timeconvert')
+        .setDescription('Converts inputted time to multiple timezones')
         .addStringOption(option =>
-            option.setName('url')
-                .setDescription('Song name, YouTube URL, or Spotify link')
-                .setRequired(true)),
-    
-    new SlashCommandBuilder()
-        .setName('stop')
-        .setDescription('Stop the music and clear the queue'),
-    
-    new SlashCommandBuilder()
-        .setName('skip')
-        .setDescription('Skip the current song'),
-    
-    new SlashCommandBuilder()
-        .setName('queue')
-        .setDescription('Show the current queue'),
-    
-    new SlashCommandBuilder()
-        .setName('pause')
-        .setDescription('Pause the current song'),
-    
-    new SlashCommandBuilder()
-        .setName('resume')
-        .setDescription('Resume the paused song'),
-    
-    new SlashCommandBuilder()
-        .setName('leave')
-        .setDescription('Make the bot leave the voice channel')
+            option.setName('time')
+                .setDescription('Time to convert (e.g., "2024-01-15 14:30" or "14:30" for today)')
+                .setRequired(true))
+        .addStringOption(option =>
+            option.setName('timezone')
+                .setDescription('Timezone of the input time (default: UTC)')
+                .setRequired(false)
+                .addChoices(
+                    { name: 'UTC', value: 'UTC' },
+                    { name: 'EST (Eastern)', value: 'America/New_York' },
+                    { name: 'PST (Pacific)', value: 'America/Los_Angeles' },
+                    { name: 'CST (Central)', value: 'America/Chicago' },
+                    { name: 'MST (Mountain)', value: 'America/Denver' },
+                    { name: 'GMT (London)', value: 'Europe/London' },
+                    { name: 'CET (Central European)', value: 'Europe/Paris' },
+                    { name: 'JST (Japan)', value: 'Asia/Tokyo' },
+                    { name: 'AEST (Australia East)', value: 'Australia/Sydney' }
+                ))
 ];
 
 // Register slash commands
@@ -1360,15 +1126,170 @@ client.on(Events.InteractionCreate, async interaction => {
                     { name: '🤝 Alliance System', value: '/setalliance\n/alliances\n/deletealliance', inline: true },
                     { name: '📊 Polls & Giveaways', value: '/pollcreate\n/giveaway', inline: true },
                     // { name: '👑 Leadership', value: '/leaders', inline: true },
-                    { name: '🎵 Music', value: '/play\n/pause\n/resume\n/stop\n/skip\n/queue\n/leave', inline: true },
                     { name: '💰 Coin Economy', value: '/flip\n/rob\n/giftcoins', inline: true },
                     { name: '🛠️ Admin Commands', value: '/assigndivision\n/assignrole\n/promote\n/deleteall\n/deletelast10\n/ban\n/kick', inline: true },
-                    { name: '📋 Mission System', value: '/sendmission\n/cancelmission', inline: true }
+                    { name: '📋 Mission System', value: '/sendmission\n/cancelmission', inline: true },
+                    { name: '🕐 Utility', value: '/timeconvert', inline: true }
                 )
                 .setTimestamp()
                 .setFooter({ text: 'ShadowBot' });
 
             await interaction.reply({ embeds: [helpEmbed] });
+        }
+
+        else if (commandName === 'timeconvert') {
+            const timeInput = interaction.options.getString('time');
+            const inputTimezone = interaction.options.getString('timezone') || 'UTC';
+            
+            // Helper function to parse time in a specific timezone
+            function parseTimeInTimezone(timeStr, tz) {
+                let year, month, day, hours, minutes;
+                
+                // Check if it's a full date or just time
+                if (timeStr.includes('-') || timeStr.includes('/')) {
+                    // Full date format
+                    const dateStr = timeStr.replace(/\//g, '-');
+                    const parts = dateStr.split(' ');
+                    const datePart = parts[0];
+                    const timePart = parts[1] || '00:00';
+                    
+                    const dateComponents = datePart.split('-');
+                    if (dateComponents.length !== 3) {
+                        throw new Error('Invalid date format');
+                    }
+                    
+                    year = parseInt(dateComponents[0]);
+                    month = parseInt(dateComponents[1]);
+                    day = parseInt(dateComponents[2]);
+                    
+                    const timeComponents = timePart.split(':');
+                    hours = parseInt(timeComponents[0]) || 0;
+                    minutes = parseInt(timeComponents[1]) || 0;
+                } else {
+                    // Time only format - use today's date in the timezone
+                    const timeComponents = timeStr.split(':');
+                    hours = parseInt(timeComponents[0]);
+                    minutes = parseInt(timeComponents[1]) || 0;
+                    
+                    if (isNaN(hours) || isNaN(minutes)) {
+                        throw new Error('Invalid time format');
+                    }
+                    
+                    // Get current date in the input timezone
+                    const now = new Date();
+                    const nowStr = now.toLocaleString('en-US', {
+                        timeZone: tz,
+                        year: 'numeric',
+                        month: '2-digit',
+                        day: '2-digit'
+                    });
+                    const [m, d, y] = nowStr.split('/');
+                    year = parseInt(y);
+                    month = parseInt(m);
+                    day = parseInt(d);
+                }
+                
+                // Create ISO string for the date/time
+                const isoStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:00`;
+                
+                // Create a date assuming UTC
+                const utcDate = new Date(isoStr + 'Z');
+                
+                // Get what this UTC time would display as in the target timezone
+                const tzDisplay = utcDate.toLocaleString('en-US', {
+                    timeZone: tz,
+                    year: 'numeric',
+                    month: '2-digit',
+                    day: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    hour12: false
+                });
+                
+                // Parse the displayed time to get components
+                const [tzMonth, tzDay, tzYear] = tzDisplay.split(', ')[0].split('/');
+                const [tzHour, tzMin] = tzDisplay.split(', ')[1].split(':');
+                
+                // Calculate the difference between what we want and what we got
+                const desiredTime = hours * 60 + minutes;
+                const actualTime = parseInt(tzHour) * 60 + parseInt(tzMin);
+                const diffMinutes = desiredTime - actualTime;
+                
+                // Adjust the UTC date by the difference
+                return new Date(utcDate.getTime() + diffMinutes * 60 * 1000);
+            }
+            
+            // Parse the time
+            let date;
+            try {
+                date = parseTimeInTimezone(timeInput, inputTimezone);
+                
+                if (isNaN(date.getTime())) {
+                    throw new Error('Invalid date/time');
+                }
+            } catch (error) {
+                await interaction.reply('❌ Invalid time format! Please use formats like:\n- `2024-01-15 14:30` (full date)\n- `14:30` (time only, uses today)\n\n**Note:** The time is interpreted in the selected input timezone.');
+                return;
+            }
+            
+            // Define timezones to convert to
+            const timezones = [
+                { name: 'UTC', tz: 'UTC' },
+                { name: 'EST (Eastern)', tz: 'America/New_York' },
+                { name: 'PST (Pacific)', tz: 'America/Los_Angeles' },
+                { name: 'CST (Central)', tz: 'America/Chicago' },
+                { name: 'MST (Mountain)', tz: 'America/Denver' },
+                { name: 'GMT (London)', tz: 'Europe/London' },
+                { name: 'CET (Central European)', tz: 'Europe/Paris' },
+                { name: 'JST (Japan)', tz: 'Asia/Tokyo' },
+                { name: 'AEST (Australia East)', tz: 'Australia/Sydney' }
+            ];
+            
+            // Build the embed
+            const inputTimeStr = date.toLocaleString('en-US', {
+                timeZone: inputTimezone,
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: false
+            });
+            
+            const timeEmbed = new EmbedBuilder()
+                .setColor(0x5865F2)
+                .setTitle('🕐 Time Conversion')
+                .setDescription(`**Input:** ${timeInput}\n**Input Timezone:** ${inputTimezone}\n**Parsed Time:** ${inputTimeStr}`)
+                .setTimestamp();
+            
+            // Add timezone conversions
+            const timezoneFields = [];
+            for (const tz of timezones) {
+                const convertedTime = date.toLocaleString('en-US', {
+                    timeZone: tz.tz,
+                    year: 'numeric',
+                    month: '2-digit',
+                    day: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit',
+                    hour12: false
+                });
+                
+                timezoneFields.push({
+                    name: tz.name,
+                    value: convertedTime,
+                    inline: true
+                });
+            }
+            
+            // Split into chunks of 3 for embed fields (Discord limit)
+            for (let i = 0; i < timezoneFields.length; i += 3) {
+                const chunk = timezoneFields.slice(i, i + 3);
+                timeEmbed.addFields(chunk);
+            }
+            
+            await interaction.reply({ embeds: [timeEmbed] });
         }
 
         else if (commandName === 'serverinfo') {
@@ -3927,322 +3848,6 @@ client.on(Events.InteractionCreate, async interaction => {
             }
         }
 
-        // Music command handlers
-        else if (commandName === 'play') {
-            const { guild, member, channel } = interaction;
-            const guildId = guild.id;
-            const data = getGuildMusicData(guildId);
-            data.textChannel = channel;
-            
-            // Check if user is in a voice channel
-            const voiceChannel = member.voice.channel;
-            if (!voiceChannel) {
-                await interaction.reply('❌ You need to be in a voice channel to use this command!');
-                return;
-            }
-            
-            await interaction.deferReply();
-            
-            const query = interaction.options.getString('url') || interaction.options.getString('query');
-            
-            // Join voice channel if not already connected
-            if (!data.connection || data.connection.state.status === VoiceConnectionStatus.Disconnected) {
-                if (voiceChannel) {
-                    const connection = joinVoiceChannel({
-                        channelId: voiceChannel.id,
-                        guildId: guildId,
-                        adapterCreator: guild.voiceAdapterCreator
-                    });
-                    
-                    const player = createAudioPlayer();
-                    connection.subscribe(player);
-                    
-                    data.connection = connection;
-                    data.player = player;
-                    
-                    // Handle connection events
-                    connection.on(VoiceConnectionStatus.Disconnected, () => {
-                        data.connection = null;
-                        data.player = null;
-                        data.isPlaying = false;
-                        data.queue = [];
-                    });
-                }
-            }
-            
-            // Search for song
-            let video;
-            let songUrl;
-            
-
-            if (!query) {
-                await interaction.editReply('❌ Please enter a song name, YouTube URL, or Spotify link!');
-                return;
-            }
-
-            // Check if it's a Spotify URL
-            if (query.includes('open.spotify.com') || query.includes('spotify.com/track')) {
-                try {
-                    // Get Spotify track data with artist information
-                    const tracks = await getTracks(query);
-                    
-                    if (!tracks || tracks.length === 0 || !tracks[0] || !tracks[0].name) {
-                        await interaction.editReply('❌ Could not fetch Spotify track information!');
-                        return;
-                    }
-                    
-                    const track = tracks[0];
-                    
-                    // Search YouTube for the track using artist and title
-                    const searchQuery = `${track.artist || ''} ${track.name}`.trim();
-                    const results = await YouTube.search(searchQuery, { limit: 1 });
-                    
-                    if (results.length === 0) {
-                        await interaction.editReply(`❌ Could not find "${track.name}" by ${track.artist || 'Unknown Artist'} on YouTube!`);
-                        return;
-                    }
-                    
-                    video = results[0];
-                    songUrl = `https://www.youtube.com/watch?v=${video.id}`;
-                    
-                    // Get cover art from Spotify data if available
-                    try {
-                        const spotifyData = await getData(query);
-                        if (spotifyData?.coverArt?.sources?.[0]?.url) {
-                            video.thumbnail = spotifyData.coverArt.sources[0].url;
-                        }
-                    } catch (e) {
-                        // Ignore errors getting cover art
-                    }
-                } catch (error) {
-                    console.error('Error fetching Spotify data:', error);
-                    await interaction.editReply('❌ Error fetching Spotify track. Please try searching by song name instead!');
-                    return;
-                }
-            } else if (query.includes('youtube.com') || query.includes('youtu.be')) {
-                // Direct YouTube URL
-                const videoId = extractVideoId(query);
-                if (videoId) {
-                    video = await YouTube.getVideo(`https://www.youtube.com/watch?v=${videoId}`);
-                    songUrl = `https://www.youtube.com/watch?v=${videoId}`;
-                } else {
-                    await interaction.editReply('❌ Invalid YouTube URL!');
-                    return;
-                }
-            } else {
-                // Search by name
-                const results = await YouTube.search(query, { limit: 1 });
-                if (results.length === 0) {
-                    await interaction.editReply('❌ No results found!');
-                    return;
-                }
-                video = results[0];
-                songUrl = `https://www.youtube.com/watch?v=${video.id}`;
-            }
-            
-            // Get duration in seconds and format it
-            const durationSeconds = video.duration ? video.duration / 1000 : null;
-            const durationFormatted = durationSeconds ? formatDuration(durationSeconds) : (video.durationFormatted || 'Unknown');
-            
-            // Get thumbnail - try multiple sources
-            let thumbnail = null;
-            if (video.thumbnail) {
-                thumbnail = typeof video.thumbnail === 'string' ? video.thumbnail : video.thumbnail.url;
-            } else if (video.id) {
-                // Fallback: construct thumbnail URL from video ID
-                thumbnail = `https://img.youtube.com/vi/${video.id}/maxresdefault.jpg`;
-            }
-            
-            const song = {
-                title: video.title,
-                url: songUrl,
-                duration: durationFormatted,
-                thumbnail: thumbnail
-            };
-            
-            // Add to queue
-            data.queue.push(song);
-            
-            if (data.isPlaying) {
-                await interaction.editReply(`✅ Added to queue: **${song.title}** (Duration: ${durationFormatted}, Position: ${data.queue.length})`);
-            } else {
-                await interaction.editReply(`✅ Starting playback...`);
-                playNext(guildId);
-            }
-        }
-        
-        else if (commandName === 'stop') {
-            const { guild } = interaction;
-            const guildId = guild.id;
-            const data = getGuildMusicData(guildId);
-            
-            if (!data.isPlaying && data.queue.length === 0) {
-                await interaction.reply('❌ Nothing is playing!');
-                return;
-            }
-            
-            data.queue = [];
-            if (data.player) {
-                data.player.stop();
-            }
-            data.isPlaying = false;
-            data.currentSong = null;
-            data.isPaused = false;
-            
-            // Delete control message
-            if (data.controlMessage) {
-                try {
-                    await data.controlMessage.delete();
-                } catch (e) {
-                    // Message might already be deleted
-                }
-                data.controlMessage = null;
-            }
-            
-            await interaction.reply('🛑 Stopped the music and cleared the queue!');
-        }
-        
-        else if (commandName === 'skip') {
-            const { guild } = interaction;
-            const guildId = guild.id;
-            const data = getGuildMusicData(guildId);
-            
-            if (!data.isPlaying) {
-                await interaction.reply('❌ Nothing is playing!');
-                return;
-            }
-            
-            if (data.player) {
-                data.player.stop();
-            }
-            
-            await interaction.reply('⏭️ Skipped the current song!');
-        }
-        
-        else if (commandName === 'queue') {
-            const { guild } = interaction;
-            const guildId = guild.id;
-            const data = getGuildMusicData(guildId);
-            
-            if (data.queue.length === 0 && !data.currentSong) {
-                await interaction.reply('📭 The queue is empty!');
-                return;
-            }
-            
-            let queueText = '';
-            if (data.currentSong) {
-                queueText += `🎵 **Now Playing:** ${data.currentSong.title}\n\n`;
-            }
-            
-            if (data.queue.length > 0) {
-                queueText += '📋 **Queue:**\n';
-                data.queue.forEach((song, index) => {
-                    queueText += `${index + 1}. ${song.title}\n`;
-                });
-            } else {
-                queueText += '📭 Queue is empty';
-            }
-            
-            await interaction.reply(queueText);
-        }
-        
-        else if (commandName === 'pause') {
-            const { guild } = interaction;
-            const guildId = guild.id;
-            const data = getGuildMusicData(guildId);
-            
-            if (!data.isPlaying) {
-                await interaction.reply('❌ Nothing is playing!');
-                return;
-            }
-            
-            if (data.player && data.player.state.status === AudioPlayerStatus.Playing) {
-                data.player.pause();
-                data.isPaused = true;
-                
-                // Update control message
-                if (data.controlMessage && data.currentSong) {
-                    try {
-                        const messageData = createNowPlayingEmbed(data.currentSong, true);
-                        await data.controlMessage.edit(messageData);
-                    } catch (e) {
-                        console.error('Error updating control message:', e);
-                    }
-                }
-                
-                await interaction.reply('⏸️ Paused!');
-            } else {
-                await interaction.reply('❌ Music is already paused!');
-            }
-        }
-        
-        else if (commandName === 'resume') {
-            const { guild } = interaction;
-            const guildId = guild.id;
-            const data = getGuildMusicData(guildId);
-            
-            if (!data.isPlaying) {
-                await interaction.reply('❌ Nothing is playing!');
-                return;
-            }
-            
-            if (data.player && data.player.state.status === AudioPlayerStatus.Paused) {
-                data.player.unpause();
-                data.isPaused = false;
-                
-                // Update control message
-                if (data.controlMessage && data.currentSong) {
-                    try {
-                        const messageData = createNowPlayingEmbed(data.currentSong, false);
-                        await data.controlMessage.edit(messageData);
-                    } catch (e) {
-                        console.error('Error updating control message:', e);
-                    }
-                }
-                
-                await interaction.reply('▶️ Resumed!');
-            } else {
-                await interaction.reply('❌ Music is not paused!');
-            }
-        }
-        
-        else if (commandName === 'leave') {
-            const { guild } = interaction;
-            const guildId = guild.id;
-            const data = getGuildMusicData(guildId);
-            
-            if (data.connection) {
-                data.connection.destroy();
-                data.connection = null;
-                data.player = null;
-                data.isPlaying = false;
-                data.queue = [];
-                data.currentSong = null;
-                await interaction.reply('👋 Left the voice channel!');
-            } else {
-                await interaction.reply('❌ I\'m not in a voice channel!');
-            }
-        }
-        
-        else if (commandName === 'musichelp') {
-            const helpEmbed = new EmbedBuilder()
-                .setColor(0x1DB954)
-                .setTitle('🎵 Music Commands')
-                .setDescription('Here are all available music commands:')
-                .addFields(
-                    { name: '/play <query>', value: 'Play a song by name, YouTube URL, or Spotify link', inline: false },
-                    { name: '/pause', value: 'Pause the current song', inline: false },
-                    { name: '/resume', value: 'Resume the paused song', inline: false },
-                    { name: '/stop', value: 'Stop the music and clear the queue', inline: false },
-                    { name: '/skip', value: 'Skip to the next song in queue', inline: false },
-                    { name: '/queue', value: 'Show the current song queue', inline: false },
-                    { name: '/leave', value: 'Stop playback and leave the voice channel', inline: false }
-                )
-                .setTimestamp()
-                .setFooter({ text: 'ShadowBot Music' });
-
-            await interaction.reply({ embeds: [helpEmbed] });
-        }
 
     } catch (error) {
         console.error('Error handling slash command:', error);
@@ -4263,90 +3868,6 @@ client.on(Events.InteractionCreate, async interaction => {
     const { customId, guild, member } = interaction;
 
     try {
-        // Handle music control buttons
-        if (customId === 'music_pause' || customId === 'music_skip' || customId === 'music_stop') {
-            const guildId = guild.id;
-            const data = getGuildMusicData(guildId);
-            
-            // Check if user is in a voice channel
-            const voiceChannel = member.voice.channel;
-            if (!voiceChannel) {
-                await interaction.reply({ content: '❌ You need to be in a voice channel!', ephemeral: true });
-                return;
-            }
-            
-            switch (customId) {
-                case 'music_pause': {
-                    if (!data.isPlaying || !data.currentSong) {
-                        await interaction.reply({ content: '❌ Nothing is playing!', ephemeral: true });
-                        return;
-                    }
-                    
-                    if (data.player) {
-                        if (data.player.state.status === AudioPlayerStatus.Playing) {
-                            data.player.pause();
-                            data.isPaused = true;
-                            
-                            // Update the embed
-                            const messageData = createNowPlayingEmbed(data.currentSong, true);
-                            await interaction.update(messageData);
-                        } else if (data.player.state.status === AudioPlayerStatus.Paused) {
-                            data.player.unpause();
-                            data.isPaused = false;
-                            
-                            // Update the embed
-                            const messageData = createNowPlayingEmbed(data.currentSong, false);
-                            await interaction.update(messageData);
-                        }
-                    }
-                    break;
-                }
-                
-                case 'music_skip': {
-                    if (!data.isPlaying) {
-                        await interaction.reply({ content: '❌ Nothing is playing!', ephemeral: true });
-                        return;
-                    }
-                    
-                    if (data.player) {
-                        data.player.stop();
-                    }
-                    
-                    await interaction.reply({ content: '⏭️ Skipped!', ephemeral: true });
-                    break;
-                }
-                
-                case 'music_stop': {
-                    if (!data.isPlaying && data.queue.length === 0) {
-                        await interaction.reply({ content: '❌ Nothing is playing!', ephemeral: true });
-                        return;
-                    }
-                    
-                    data.queue = [];
-                    if (data.player) {
-                        data.player.stop();
-                    }
-                    data.isPlaying = false;
-                    data.currentSong = null;
-                    data.isPaused = false;
-                    
-                    // Delete control message
-                    if (data.controlMessage) {
-                        try {
-                            await data.controlMessage.delete();
-                        } catch (e) {
-                            // Message might already be deleted
-                        }
-                        data.controlMessage = null;
-                    }
-                    
-                    await interaction.reply({ content: '🛑 Stopped!', ephemeral: true });
-                    break;
-                }
-            }
-            return;
-        }
-        
         // Handle mission accept/decline buttons
         if (customId.startsWith('mission_accept_') || customId.startsWith('mission_decline_')) {
             const missionId = customId.split('_')[2];
