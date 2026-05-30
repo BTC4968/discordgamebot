@@ -1,3 +1,7 @@
+"Verification for Spacy Sky Diver"
+
+
+
 # Discord ShadowBot
 
 A Discord bot built with Node.js and Discord.js for managing game server roles and providing server information.
